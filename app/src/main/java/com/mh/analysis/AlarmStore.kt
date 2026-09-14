@@ -14,9 +14,10 @@ object AlarmStore {
 
     fun add(c:Context,s:Signal){
         val list=list(c).toMutableList()
-        val expires=s.createdCandleTime + timeframeMs(s.timeframe)*s.validBars
+        val now=System.currentTimeMillis()
+        val expires=now + timeframeMs(s.timeframe)*s.validBars
         if(list.none{it.signalId==s.id}){
-            list.add(0,AlarmEntry("alarm_${s.id}",s.id,s.symbol,s.timeframe,s.direction,s.entry,expires,System.currentTimeMillis(),true,"ARMED",null))
+            list.add(0,AlarmEntry("alarm_${s.id}",s.id,s.symbol,s.timeframe,s.direction,s.entry,expires,now,true,"ARMED",null))
             save(c,list)
         }
     }
