@@ -84,7 +84,15 @@ class MainActivity:Activity(){
 
     private fun showRecords(){val r=SignalStore.records(this);val body=StringBuilder(SignalStore.stats(this)).append("\n\n");r.take(50).forEachIndexed{i,x->body.append("${i+1}. ${x.symbol} ${x.timeframe} • ${x.direction} • ${x.result} • ${x.score}/100\nEntry ${price(x.entry)} • ${time(x.startedAt)}\n\n")};AlertDialog.Builder(this).setTitle("MH Signal Records").setMessage(body.toString()).setPositiveButton("Close",null).show()}
 
-    private fun enableFloat(){val k=key.text.toString().trim();if(k.isBlank()){Toast.makeText(this,"Enter FCS key first",Toast.LENGTH_LONG).show();return};prefs.edit().putString("api_key",k).apply();if(!Settings.canDrawOverlays(this))startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName")))else startOverlay()}
+    private fun enableFloat(){
+        val k=key.text.toString().trim()
+        if(k.isBlank()){Toast.makeText(this,"Enter FCS key first",Toast.LENGTH_LONG).show();return}
+        prefs.edit().putString("api_key",k).apply()
+        if(!Settings.canDrawOverlays(this)){
+            prefs.edit().putBoolean("want_float",true).apply()
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName")))
+        }else startOverlay()
+    }
     override fun onResume(){super.onResume();if(Settings.canDrawOverlays(this)&&prefs.getBoolean("want_float",false)){prefs.edit().putBoolean("want_float",false).apply();startOverlay()}}
     private fun startOverlay(){val i=Intent(this,OverlayService::class.java);if(Build.VERSION.SDK_INT>=26)startForegroundService(i)else startService(i);Toast.makeText(this,"MH floating mode active",Toast.LENGTH_SHORT).show()}
 
