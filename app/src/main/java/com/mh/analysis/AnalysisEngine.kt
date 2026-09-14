@@ -94,15 +94,15 @@ object AnalysisEngine {
         val entrySource=validEntries.first().first;val entry=validEntries.first().second
 
         val tf=tfMinutes(timeframe)
-        val slAtr=when{tf<=1->0.55;tf<=5->0.65;tf<=15->0.78;tf<=30->0.88;tf<=60->1.0;tf<=240->1.15;else->1.30}
-        val maxRiskAtr=when{tf<=5->0.90;tf<=15->1.05;tf<=30->1.20;tf<=60->1.35;else->1.60}
+        val slAtr=when{tf<=3->0.60;tf<=5->0.65;tf<=10->0.72;tf<=15->0.78;tf<=30->0.88;tf<=60->1.0;tf<=120->1.08;tf<=240->1.15;tf<=360->1.22;tf<=720->1.28;else->1.30}
+        val maxRiskAtr=when{tf<=5->0.90;tf<=10->0.98;tf<=15->1.05;tf<=30->1.20;tf<=60->1.35;tf<=120->1.45;tf<=240->1.55;else->1.70}
         val structureRisk=if(dir=="BUY")entry-(localLow-a*.08) else (localHigh+a*.08)-entry
         val baseRisk=max(a*slAtr,abs(last.c-prev.c)*1.15)
         val risk=max(baseRisk,min(max(structureRisk,0.0),a*maxRiskAtr)).coerceAtMost(a*maxRiskAtr)
         val sl=if(dir=="BUY")entry-risk else entry+risk
 
-        val tp1Atr=when{tf<=1->0.65;tf<=5->0.85;tf<=15->1.00;tf<=30->1.15;tf<=60->1.35;tf<=240->1.60;else->1.90}
-        val tp2Atr=when{tf<=1->1.00;tf<=5->1.20;tf<=15->1.45;tf<=30->1.65;tf<=60->1.95;tf<=240->2.30;else->2.70}
+        val tp1Atr=when{tf<=3->0.75;tf<=5->0.85;tf<=10->0.93;tf<=15->1.00;tf<=30->1.15;tf<=60->1.35;tf<=120->1.48;tf<=240->1.60;tf<=360->1.72;tf<=720->1.82;else->1.90}
+        val tp2Atr=when{tf<=3->1.10;tf<=5->1.20;tf<=10->1.33;tf<=15->1.45;tf<=30->1.65;tf<=60->1.95;tf<=120->2.12;tf<=240->2.30;tf<=360->2.45;tf<=720->2.60;else->2.70}
         val rawTp1=if(dir=="BUY")entry+a*tp1Atr else entry-a*tp1Atr;val rawTp2=if(dir=="BUY")entry+a*tp2Atr else entry-a*tp2Atr
         val nearestStructure=if(dir=="BUY")listOf(localHigh,priorHigh,swingHigh).filter{it>entry+a*.25}.minOrNull() else listOf(localLow,priorLow,swingLow).filter{it<entry-a*.25}.maxOrNull()
         val tp1=if(nearestStructure!=null){if(dir=="BUY")min(rawTp1,nearestStructure)else max(rawTp1,nearestStructure)}else rawTp1
@@ -156,7 +156,9 @@ object AnalysisEngine {
         return "NO VALID TRADE / WAIT\nThe engine did not find a fresh untouched entry zone with enough structure confirmation on $symbol $timeframe. Current trend: $trend. EMA20 ${if(e20>e50)"above" else "below"} EMA50, RSI14 ${one(r)}, MACD ${fmt(m)}. Indicator bias alone is not enough to create a trade."
     }
 
-    private fun tfMinutes(tf:String)=when(tf.lowercase(Locale.US)){"1m"->1;"5m"->5;"15m"->15;"30m"->30;"1h"->60;"4h"->240;"1d"->1440;else->15}
+    private fun tfMinutes(tf:String)=when(tf.lowercase(Locale.US)){
+        "3m"->3;"5m"->5;"10m"->10;"15m"->15;"30m"->30;"1h"->60;"2h"->120;"4h"->240;"6h"->360;"12h"->720;"1d"->1440;else->15
+    }
     private fun one(v:Double)=String.format(Locale.US,"%.1f",v);private fun two(v:Double)=String.format(Locale.US,"%.2f",v)
     private fun fmt(v:Double?)=if(v==null)"-" else if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
     private fun ema(v:List<Double>,p:Int):List<Double>{if(v.isEmpty())return emptyList();val k=2.0/(p.coerceAtMost(v.size)+1);val out=MutableList(v.size){0.0};out[0]=v[0];for(i in 1 until v.size)out[i]=v[i]*k+out[i-1]*(1-k);return out}
