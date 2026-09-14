@@ -13,117 +13,90 @@ object SignalStore {
     data class ProcessEvent(val signal:Signal,val state:String,val at:Long)
     private fun prefs(c:Context)=c.getSharedPreferences(PREF,Context.MODE_PRIVATE)
     private fun activeKey(symbol:String,timeframe:String)="active_${symbol.uppercase()}_${timeframe.lowercase()}"
+    private fun lastKey(symbol:String,timeframe:String)="last_${symbol.uppercase()}_${timeframe.lowercase()}"
 
-    fun loadActive(c:Context,symbol:String,timeframe:String):ActiveSignal?{
-        val raw=prefs(c).getString(activeKey(symbol,timeframe),null)?:return null
-        return runCatching{activeFromJson(JSONObject(raw))}.getOrNull()
-    }
-    fun pendingSignals(c:Context):List<ActiveSignal>{
-        return prefs(c).all.entries.filter{it.key.startsWith("active_")}.mapNotNull{e->
-            val raw=e.value as? String ?: return@mapNotNull null
-            runCatching{activeFromJson(JSONObject(raw))}.getOrNull()
-        }.filter{it.state=="PENDING"}
-    }
-    fun saveActive(c:Context,a:ActiveSignal){prefs(c).edit().putString(activeKey(a.signal.symbol,a.signal.timeframe),activeToJson(a).toString()).apply()}
+    fun loadActive(c:Context,symbol:String,timeframe:String):ActiveSignal?=prefs(c).getString(activeKey(symbol,timeframe),null)?.let{runCatching{activeFromJson(JSONObject(it))}.getOrNull()}
+    fun loadLast(c:Context,symbol:String,timeframe:String):ActiveSignal?=prefs(c).getString(lastKey(symbol,timeframe),null)?.let{runCatching{activeFromJson(JSONObject(it))}.getOrNull()}
+    fun displayState(c:Context,symbol:String,timeframe:String):ActiveSignal?=loadActive(c,symbol,timeframe)
+        ?:openTrades(c).firstOrNull{it.signal.symbol==symbol&&it.signal.timeframe==timeframe}
+        ?:loadLast(c,symbol,timeframe)
+
+    fun pendingSignals(c:Context):List<ActiveSignal>=prefs(c).all.entries.filter{it.key.startsWith("active_")}.mapNotNull{e->
+        val raw=e.value as? String?:return@mapNotNull null;runCatching{activeFromJson(JSONObject(raw))}.getOrNull()
+    }.filter{it.state=="PENDING"}
+    fun saveActive(c:Context,a:ActiveSignal){prefs(c).edit().putString(activeKey(a.signal.symbol,a.signal.timeframe),activeToJson(a).toString()).putString(lastKey(a.signal.symbol,a.signal.timeframe),activeToJson(a).toString()).apply()}
+    private fun saveLast(c:Context,a:ActiveSignal){prefs(c).edit().putString(lastKey(a.signal.symbol,a.signal.timeframe),activeToJson(a).toString()).apply()}
     fun clearActive(c:Context,symbol:String,timeframe:String){prefs(c).edit().remove(activeKey(symbol,timeframe)).apply()}
 
     fun findDuplicate(c:Context,candidate:Signal):ActiveSignal?{
-        val pending=loadActive(c,candidate.symbol,candidate.timeframe)
-        if(pending!=null&&AnalysisEngine.sameSetup(pending.signal,candidate))return pending
+        val p=loadActive(c,candidate.symbol,candidate.timeframe);if(p!=null&&AnalysisEngine.sameSetup(p.signal,candidate))return p
         return openTrades(c).firstOrNull{it.signal.symbol==candidate.symbol&&it.signal.timeframe==candidate.timeframe&&AnalysisEngine.sameSetup(it.signal,candidate)}
     }
     fun acceptCandidate(c:Context,candidate:Signal):Boolean{
         if(findDuplicate(c,candidate)!=null)return false
-        val old=loadActive(c,candidate.symbol,candidate.timeframe)
-        if(old!=null){
-            addRecord(c,toRecord(old,"EXPIRED",System.currentTimeMillis()))
-            AlarmStore.expireSignal(c,old.signal.id,"EXPIRED")
-            clearActive(c,old.signal.symbol,old.signal.timeframe)
+        loadActive(c,candidate.symbol,candidate.timeframe)?.let{old->
+            val done=old.copy(state="EXPIRED");addRecord(c,toRecord(done,"EXPIRED",System.currentTimeMillis()));saveLast(c,done);AlarmStore.expireSignal(c,old.signal.id,"EXPIRED");clearActive(c,old.signal.symbol,old.signal.timeframe)
         }
-        saveActive(c,ActiveSignal(candidate,state="PENDING"))
-        return true
+        saveActive(c,ActiveSignal(candidate,state="PENDING"));return true
     }
 
     fun evaluate(c:Context,symbol:String,timeframe:String,candles:List<Candle>):ActiveSignal?{
         var terminal=evaluateOpenTrades(c,symbol,timeframe,candles)
-        val pending=loadActive(c,symbol,timeframe)?:return terminal
+        val pending=loadActive(c,symbol,timeframe)?:return terminal?:displayState(c,symbol,timeframe)
         val s=pending.signal
         val future=candles.filter{toMillis(it.t)>maxOf(toMillis(s.createdCandleTime),s.createdAt)}
-        if(future.isEmpty())return pending
         for(x in future){
-            val events=processMinuteCandle(c,symbol,x)
-            val mine=events.lastOrNull{it.signal.id==s.id}
-            if(mine!=null)return when(mine.state){
-                "ACTIVE"->openTrades(c).firstOrNull{it.signal.id==s.id}
-                else->ActiveSignal(s,null,0,mine.state)
-            }
+            val mine=processMinuteCandle(c,symbol,x).lastOrNull{it.signal.id==s.id}
+            if(mine!=null)return displayState(c,symbol,timeframe)
         }
-        val current=loadActive(c,symbol,timeframe)?:return terminal
+        val current=loadActive(c,symbol,timeframe)?:return terminal?:displayState(c,symbol,timeframe)
         val check=AnalysisEngine.setupCheck(current.signal,candles)
-        if(!check.valid){
-            val expired=current.copy(state="EXPIRED")
-            addRecord(c,toRecord(expired,"EXPIRED",toMillis(candles.last().t)))
-            AlarmStore.expireSignal(c,current.signal.id,"EXPIRED")
-            clearActive(c,current.signal.symbol,current.signal.timeframe)
-            terminal=expired
-        }
-        return terminal?:loadActive(c,symbol,timeframe)
+        if(!check.valid){terminal=expirePending(c,current,check.reason,toMillis(candles.last().t))}
+        return terminal?:displayState(c,symbol,timeframe)
     }
 
     fun processMinuteCandle(c:Context,symbol:String,x:Candle):List<ProcessEvent>{
-        val events=mutableListOf<ProcessEvent>()
-        val t=toMillis(x.t)
+        val events=mutableListOf<ProcessEvent>();val t=toMillis(x.t)
         pendingSignals(c).filter{it.signal.symbol==symbol}.forEach{pending->
-            val s=pending.signal
-            if(t<=maxOf(toMillis(s.createdCandleTime),s.createdAt))return@forEach
+            val s=pending.signal;if(t<=maxOf(toMillis(s.createdCandleTime),s.createdAt))return@forEach
             val touched=x.l<=s.entry&&x.h>=s.entry
-            val missed=if(s.direction=="BUY") x.l>s.entry+s.atr*1.25 else x.h<s.entry-s.atr*1.25
+            val ranAway=if(s.direction=="BUY")x.l>s.entry+s.atr*1.8 else x.h<s.entry-s.atr*1.8
             if(touched){
-                clearActive(c,s.symbol,s.timeframe)
-                var active=ActiveSignal(s,t,pending.barsSeen+1,"ACTIVE")
-                AlarmStore.expireSignal(c,s.id,"TRIGGERED")
-                val hitSl=if(s.direction=="BUY")x.l<=s.sl else x.h>=s.sl
-                val hitTp=if(s.direction=="BUY")x.h>=s.tp1 else x.l<=s.tp1
-                if(hitSl||hitTp){
-                    val result=if(hitSl)"LOSS" else "WIN"
-                    active=active.copy(state=result)
-                    addRecord(c,toRecord(active,result,t));events+=ProcessEvent(s,result,t)
-                }else{
-                    addOpen(c,active);events+=ProcessEvent(s,"ACTIVE",t)
-                }
-            }else if(missed){
-                val expired=pending.copy(state="EXPIRED")
-                addRecord(c,toRecord(expired,"EXPIRED",t));AlarmStore.expireSignal(c,s.id,"EXPIRED");clearActive(c,s.symbol,s.timeframe)
-                events+=ProcessEvent(s,"EXPIRED",t)
-            }
+                clearActive(c,s.symbol,s.timeframe);var active=ActiveSignal(s,t,pending.barsSeen+1,"ACTIVE");saveLast(c,active);AlarmStore.expireSignal(c,s.id,"TRIGGERED")
+                val hitSl=if(s.direction=="BUY")x.l<=s.sl else x.h>=s.sl;val hitTp=if(s.direction=="BUY")x.h>=s.tp1 else x.l<=s.tp1
+                if(hitSl||hitTp){val result=if(hitSl)"LOSS" else "WIN";active=active.copy(state=result);addRecord(c,toRecord(active,result,t));saveLast(c,active);events+=ProcessEvent(s,result,t)}
+                else{addOpen(c,active);events+=ProcessEvent(s,"ACTIVE",t)}
+            }else if(ranAway){val expired=expirePending(c,pending,"Market moved too far from the untouched entry; original pending setup is no longer actionable.",t);events+=ProcessEvent(s,expired.state,t)}
         }
-        val all=openTrades(c).toMutableList();var changed=false
-        val it=all.listIterator()
+        val all=openTrades(c).toMutableList();var changed=false;val it=all.listIterator()
         while(it.hasNext()){
-            val a=it.next();val s=a.signal
-            if(s.symbol!=symbol||t<(a.activatedAt?:0L))continue
-            val hitSl=if(s.direction=="BUY")x.l<=s.sl else x.h>=s.sl
-            val hitTp=if(s.direction=="BUY")x.h>=s.tp1 else x.l<=s.tp1
-            if(hitSl||hitTp){
-                val result=if(hitSl)"LOSS" else "WIN";val done=a.copy(state=result)
-                addRecord(c,toRecord(done,result,t));it.remove();changed=true;events+=ProcessEvent(s,result,t)
-            }
+            val a=it.next();val s=a.signal;if(s.symbol!=symbol||t<(a.activatedAt?:0L))continue
+            val hitSl=if(s.direction=="BUY")x.l<=s.sl else x.h>=s.sl;val hitTp=if(s.direction=="BUY")x.h>=s.tp1 else x.l<=s.tp1
+            if(hitSl||hitTp){val result=if(hitSl)"LOSS" else "WIN";val done=a.copy(state=result);addRecord(c,toRecord(done,result,t));saveLast(c,done);it.remove();changed=true;events+=ProcessEvent(s,result,t)}
         }
-        if(changed)saveOpen(c,all)
-        return events
+        if(changed)saveOpen(c,all);return events
     }
 
-    private fun evaluateOpenTrades(c:Context,symbol:String,timeframe:String,candles:List<Candle>):ActiveSignal?{
-        var terminal:ActiveSignal?=null
-        candles.forEach{x->
-            processMinuteCandle(c,symbol,x).lastOrNull{it.signal.timeframe==timeframe&&it.state in setOf("WIN","LOSS")}?.let{e->terminal=ActiveSignal(e.signal,e.at,0,e.state)}
+    fun expireAllPendingForVolatility(c:Context,symbol:String,at:Long=System.currentTimeMillis()):List<ProcessEvent>{
+        val out=mutableListOf<ProcessEvent>()
+        pendingSignals(c).filter{it.signal.symbol==symbol}.forEach{a->
+            val done=expirePending(c,a,"Abnormal live volatility invalidated the pending setup before entry.",at);out+=ProcessEvent(a.signal,done.state,at)
         }
-        return terminal
+        return out
+    }
+
+    private fun expirePending(c:Context,a:ActiveSignal,reason:String,at:Long):ActiveSignal{
+        val done=a.copy(state="EXPIRED");addRecord(c,toRecord(done,"EXPIRED",at));saveLast(c,done);AlarmStore.expireSignal(c,a.signal.id,"EXPIRED");clearActive(c,a.signal.symbol,a.signal.timeframe)
+        prefs(c).edit().putString("reason_${a.signal.id}",reason).apply();return done
+    }
+    fun lifecycleReason(c:Context,signalId:String)=prefs(c).getString("reason_$signalId","").orEmpty()
+
+    private fun evaluateOpenTrades(c:Context,symbol:String,timeframe:String,candles:List<Candle>):ActiveSignal?{
+        var terminal:ActiveSignal?=null;candles.forEach{x->processMinuteCandle(c,symbol,x).lastOrNull{it.signal.timeframe==timeframe&&it.state in setOf("WIN","LOSS")}?.let{e->terminal=ActiveSignal(e.signal,e.at,0,e.state)}};return terminal
     }
 
     fun openTrades(c:Context):List<ActiveSignal>{
-        val cutoff=System.currentTimeMillis()-KEEP_MS
-        val raw=prefs(c).getString("open_trades","[]")?:"[]";val arr=runCatching{JSONArray(raw)}.getOrElse{JSONArray()};val out=mutableListOf<ActiveSignal>()
+        val cutoff=System.currentTimeMillis()-KEEP_MS;val arr=runCatching{JSONArray(prefs(c).getString("open_trades","[]")?:"[]")}.getOrElse{JSONArray()};val out=mutableListOf<ActiveSignal>()
         for(i in 0 until arr.length())runCatching{activeFromJson(arr.getJSONObject(i))}.getOrNull()?.let{if(it.signal.createdAt>=cutoff)out+=it}
         val sorted=out.sortedByDescending{it.signal.createdAt};saveOpen(c,sorted);return sorted
     }
@@ -131,7 +104,7 @@ object SignalStore {
     private fun saveOpen(c:Context,l:List<ActiveSignal>){val a=JSONArray();l.take(100).forEach{a.put(activeToJson(it))};prefs(c).edit().putString("open_trades",a.toString()).apply()}
 
     fun records(c:Context):List<TradeRecord>{
-        val cutoff=System.currentTimeMillis()-KEEP_MS;val raw=prefs(c).getString("records","[]")?:"[]";val arr=runCatching{JSONArray(raw)}.getOrElse{JSONArray()};val out=mutableListOf<TradeRecord>()
+        val cutoff=System.currentTimeMillis()-KEEP_MS;val arr=runCatching{JSONArray(prefs(c).getString("records","[]")?:"[]")}.getOrElse{JSONArray()};val out=mutableListOf<TradeRecord>()
         for(i in 0 until arr.length())runCatching{recordFromJson(arr.getJSONObject(i))}.getOrNull()?.let{if(it.startedAt>=cutoff)out+=it}
         val sorted=out.sortedByDescending{it.startedAt};persistRecords(c,sorted);return sorted
     }
@@ -141,20 +114,14 @@ object SignalStore {
     private fun addRecord(c:Context,r:TradeRecord){val l=records(c).toMutableList();val i=l.indexOfFirst{it.id==r.id};if(i>=0)l[i]=r else l.add(0,r);persistRecords(c,l)}
     private fun persistRecords(c:Context,l:List<TradeRecord>){val a=JSONArray();l.take(200).forEach{a.put(recordToJson(it))};prefs(c).edit().putString("records",a.toString()).apply()}
     fun stats(c:Context,day:String?=null):String{
-        val r=if(day==null)records(c)else recordsForDay(c,day);val open=if(day==null)openTrades(c).size else openForDay(c,day).size
-        val wins=r.count{it.result=="WIN"};val losses=r.count{it.result=="LOSS"};val expired=r.count{it.result=="EXPIRED"};val resolved=wins+losses;val total=r.size+open
-        val winRate=if(resolved==0)0.0 else wins*100.0/resolved;val lossRate=if(resolved==0)0.0 else losses*100.0/resolved;val expRate=if(total==0)0.0 else expired*100.0/total
-        return "Signals: $total   Open: $open   Resolved: $resolved\nWins: $wins (${one(winRate)}%)   Losses: $losses (${one(lossRate)}%)\nExpired/Missed: $expired (${one(expRate)}%)   Win ratio: ${one(winRate)}%"
+        val r=if(day==null)records(c)else recordsForDay(c,day);val open=if(day==null)openTrades(c).size else openForDay(c,day).size;val wins=r.count{it.result=="WIN"};val losses=r.count{it.result=="LOSS"};val expired=r.count{it.result=="EXPIRED"};val resolved=wins+losses;val total=r.size+open
+        val wr=if(resolved==0)0.0 else wins*100.0/resolved;val lr=if(resolved==0)0.0 else losses*100.0/resolved;val er=if(total==0)0.0 else expired*100.0/total
+        return "Signals: $total   Open: $open   Resolved: $resolved\nWins: $wins (${one(wr)}%)   Losses: $losses (${one(lr)}%)\nExpired/Invalid: $expired (${one(er)}%)   Win ratio: ${one(wr)}%"
     }
 
     fun isStale(a:ActiveSignal):Boolean{
-        val tf=when(a.signal.timeframe.lowercase()){
-            "3m"->180_000L;"5m"->300_000L;"10m"->600_000L;"15m"->900_000L;"30m"->1_800_000L;
-            "1h"->3_600_000L;"2h"->7_200_000L;"4h"->14_400_000L;"6h"->21_600_000L;"12h"->43_200_000L;
-            "1d","1day"->86_400_000L;else->900_000L
-        }
-        val limit=maxOf(30*60_000L,tf*3)
-        return System.currentTimeMillis()-a.signal.createdAt>limit
+        val tf=when(a.signal.timeframe.lowercase()){ "3m"->180_000L;"5m"->300_000L;"10m"->600_000L;"15m"->900_000L;"30m"->1_800_000L;"1h"->3_600_000L;"2h"->7_200_000L;"4h"->14_400_000L;"6h"->21_600_000L;"12h"->43_200_000L;"1d","1day"->86_400_000L;else->900_000L }
+        return System.currentTimeMillis()-a.signal.createdAt>maxOf(30*60_000L,tf*3)
     }
 
     private fun toRecord(a:ActiveSignal,result:String,end:Long):TradeRecord{val s=a.signal;return TradeRecord(s.id,s.symbol,s.timeframe,s.direction,s.entry,s.sl,s.tp1,s.score,s.createdAt,a.activatedAt,end,result)}
