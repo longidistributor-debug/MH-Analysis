@@ -48,7 +48,7 @@ object SignalStore {
         var terminal=evaluateOpenTrades(c,symbol,timeframe,candles)
         val pending=loadActive(c,symbol,timeframe)?:return terminal
         val s=pending.signal
-        val future=candles.filter{toMillis(it.t)>toMillis(s.createdCandleTime)}
+        val future=candles.filter{toMillis(it.t)>maxOf(toMillis(s.createdCandleTime),s.createdAt)}
         if(future.isEmpty())return pending
         for(x in future){
             val events=processMinuteCandle(c,symbol,x)
@@ -75,7 +75,7 @@ object SignalStore {
         val t=toMillis(x.t)
         pendingSignals(c).filter{it.signal.symbol==symbol}.forEach{pending->
             val s=pending.signal
-            if(t<=toMillis(s.createdCandleTime))return@forEach
+            if(t<=maxOf(toMillis(s.createdCandleTime),s.createdAt))return@forEach
             val touched=x.l<=s.entry&&x.h>=s.entry
             val missed=if(s.direction=="BUY") x.l>s.entry+s.atr*1.25 else x.h<s.entry-s.atr*1.25
             if(touched){
@@ -148,7 +148,11 @@ object SignalStore {
     }
 
     fun isStale(a:ActiveSignal):Boolean{
-        val tf=when(a.signal.timeframe.lowercase()){ "1m"->60_000L;"5m"->300_000L;"15m"->900_000L;"30m"->1_800_000L;"1h"->3_600_000L;"4h"->14_400_000L;else->86_400_000L }
+        val tf=when(a.signal.timeframe.lowercase()){
+            "3m"->180_000L;"5m"->300_000L;"10m"->600_000L;"15m"->900_000L;"30m"->1_800_000L;
+            "1h"->3_600_000L;"2h"->7_200_000L;"4h"->14_400_000L;"6h"->21_600_000L;"12h"->43_200_000L;
+            "1d","1day"->86_400_000L;else->900_000L
+        }
         val limit=maxOf(30*60_000L,tf*3)
         return System.currentTimeMillis()-a.signal.createdAt>limit
     }
