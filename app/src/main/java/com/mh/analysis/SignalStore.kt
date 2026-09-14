@@ -21,7 +21,7 @@ object SignalStore {
         ?:openTrades(c).firstOrNull{it.signal.symbol==symbol&&it.signal.timeframe==timeframe}
         ?:loadLast(c,symbol,timeframe)
 
-    fun pendingSignals(c:Context):List<ActiveSignal>=prefs(c).all.entries.filter{it.key.startsWith("active_")}.mapNotNull{e->
+    fun pendingSignals(c:Context):List<ActiveSignal> = prefs(c).all.entries.filter{it.key.startsWith("active_")}.mapNotNull{e->
         val raw=e.value as? String?:return@mapNotNull null;runCatching{activeFromJson(JSONObject(raw))}.getOrNull()
     }.filter{it.state=="PENDING"}
     fun saveActive(c:Context,a:ActiveSignal){prefs(c).edit().putString(activeKey(a.signal.symbol,a.signal.timeframe),activeToJson(a).toString()).putString(lastKey(a.signal.symbol,a.signal.timeframe),activeToJson(a).toString()).apply()}
