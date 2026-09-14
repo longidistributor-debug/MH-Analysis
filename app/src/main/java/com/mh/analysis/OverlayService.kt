@@ -20,28 +20,133 @@ import kotlin.concurrent.thread
 import kotlin.math.abs
 
 class OverlayService:Service(){
-    private lateinit var wm:WindowManager;private lateinit var bubble:TextView;private var panel:LinearLayout?=null;private var chart:WebView?=null;private var status:TextView?=null;private val prefs by lazy{getSharedPreferences("mh",MODE_PRIVATE)}
-    private var symbol="XAUUSD";private var period="15m";private var data:List<Candle> = emptyList();private var ready=false;private var busy=false;private var loadedAt=0L;private val h=Handler(Looper.getMainLooper())
+    private lateinit var wm:WindowManager
+    private lateinit var bubble:TextView
+    private var panel:LinearLayout?=null
+    private var chart:WebView?=null
+    private var status:TextView?=null
+    private val prefs by lazy{getSharedPreferences("mh",MODE_PRIVATE)}
+    private var symbol="XAUUSD"
+    private var period="15m"
+    private var data:List<Candle> = emptyList()
+    private var ready=false
+    private var busy=false
+    private var loadedAt=0L
+    private var generation=0L
+    private var queued=false
+    private val h=Handler(Looper.getMainLooper())
     private val refresh=object:Runnable{override fun run(){if(panel!=null)loadData();h.postDelayed(this,65_000)}}
+
     override fun onBind(i:Intent?):IBinder?=null
     override fun onCreate(){super.onCreate();wm=getSystemService(WINDOW_SERVICE) as WindowManager;startFg();createBubble()}
     private fun read(){symbol=prefs.getString("symbol","XAUUSD")?:"XAUUSD";period=prefs.getString("period","15m")?:"15m"}
     private fun startFg(){val id="mh_float";if(Build.VERSION.SDK_INT>=26)(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(NotificationChannel(id,"MS Floating Analysis",NotificationManager.IMPORTANCE_LOW));val b=if(Build.VERSION.SDK_INT>=26)Notification.Builder(this,id)else Notification.Builder(this);startForeground(210,b.setSmallIcon(android.R.drawable.ic_menu_compass).setContentTitle("MS floating mode").setContentText("Live state synchronized with MH Analysis").build())}
     private fun type()=if(Build.VERSION.SDK_INT>=26)WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
-    private fun createBubble(){bubble=TextView(this).apply{text="MS";textSize=16f;gravity=Gravity.CENTER;setTextColor(Color.WHITE);setTypeface(typeface,Typeface.BOLD);background=GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(Color.BLACK);setStroke(dp(2),Color.WHITE)}};val p=WindowManager.LayoutParams(dp(58),dp(58),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.START;x=dp(16);y=dp(190)};var sx=0;var sy=0;var tx=0f;var ty=0f;var moved=false;bubble.setOnTouchListener{_,e->when(e.action){MotionEvent.ACTION_DOWN->{sx=p.x;sy=p.y;tx=e.rawX;ty=e.rawY;moved=false;true};MotionEvent.ACTION_MOVE->{val dx=(e.rawX-tx).toInt();val dy=(e.rawY-ty).toInt();if(abs(dx)>dp(4)||abs(dy)>dp(4))moved=true;p.x=sx+dx;p.y=sy+dy;wm.updateViewLayout(bubble,p);true};MotionEvent.ACTION_UP->{if(!moved)toggle();true};else->false}};wm.addView(bubble,p)}
+
+    private fun createBubble(){
+        bubble=TextView(this).apply{text="MS";textSize=16f;gravity=Gravity.CENTER;setTextColor(Color.WHITE);setTypeface(typeface,Typeface.BOLD);background=GradientDrawable().apply{shape=GradientDrawable.OVAL;setColor(Color.BLACK);setStroke(dp(2),Color.WHITE)}}
+        val p=WindowManager.LayoutParams(dp(58),dp(58),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.START;x=dp(16);y=dp(190)}
+        var sx=0;var sy=0;var tx=0f;var ty=0f;var moved=false
+        bubble.setOnTouchListener{_,e->when(e.action){
+            MotionEvent.ACTION_DOWN->{sx=p.x;sy=p.y;tx=e.rawX;ty=e.rawY;moved=false;true}
+            MotionEvent.ACTION_MOVE->{val dx=(e.rawX-tx).toInt();val dy=(e.rawY-ty).toInt();if(abs(dx)>dp(4)||abs(dy)>dp(4))moved=true;p.x=sx+dx;p.y=sy+dy;wm.updateViewLayout(bubble,p);true}
+            MotionEvent.ACTION_UP->{if(!moved)toggle();true}
+            else->false
+        }}
+        wm.addView(bubble,p)
+    }
+
     private fun toggle(){if(panel==null)showPanel()else hidePanel()}
-    private fun showPanel(){read();val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(10),dp(10),dp(10));background=GradientDrawable().apply{setColor(Color.rgb(5,5,5));cornerRadius=dp(14).toFloat();setStroke(dp(1),Color.GRAY)}};panel=root;val head=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};head.addView(tv("MS • LIVE STATE",14f,true),LinearLayout.LayoutParams(0,dp(40),1f));head.addView(Button(this).apply{text="×";setOnClickListener{hidePanel()}},LinearLayout.LayoutParams(dp(46),dp(40)));root.addView(head)
-        val pair=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};pair.addView(Button(this).apply{text="GOLD";setOnClickListener{switch("XAUUSD",period)}},LinearLayout.LayoutParams(0,dp(42),1f));pair.addView(Button(this).apply{text="BTC";setOnClickListener{switch("BTCUSDT",period)}},LinearLayout.LayoutParams(0,dp(42),1f));root.addView(pair)
-        val tf=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};arrayOf("5m","15m","1h").forEach{t->tf.addView(Button(this).apply{text=t;setOnClickListener{switch(symbol,t)}},LinearLayout.LayoutParams(0,dp(40),1f))};root.addView(tf)
-        chart=WebView(this).apply{settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK);webViewClient=object:WebViewClient(){override fun onPageFinished(v:WebView?,u:String?){ready=true;loadData()}};loadUrl("file:///android_asset/chart.html")};root.addView(chart,LinearLayout.LayoutParams(-1,dp(360)));root.addView(Button(this).apply{text="NEW ANALYZE";setTextColor(Color.BLACK);setBackgroundColor(Color.WHITE);setOnClickListener{analyze()}},LinearLayout.LayoutParams(-1,dp(46)));status=tv("$symbol • $period",10.5f);root.addView(status);wm.addView(root,WindowManager.LayoutParams(dp(390),dp(650),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.END;x=dp(6);y=dp(35)});h.removeCallbacks(refresh);h.postDelayed(refresh,65_000)}
-    private fun switch(s:String,p:String){symbol=s;period=p;prefs.edit().putString("symbol",s).putString("period",p).apply();data=emptyList();loadedAt=0;chart?.evaluateJavascript("clearChart()",null);status?.text="$symbol • $period • loading";loadData()}
+
+    private fun showPanel(){
+        read()
+        val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(10),dp(10),dp(10),dp(10));background=GradientDrawable().apply{setColor(Color.rgb(5,5,5));cornerRadius=dp(14).toFloat();setStroke(dp(1),Color.GRAY)}}
+        panel=root
+        val head=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+        head.addView(tv("MS • LIVE STATE",14f,true),LinearLayout.LayoutParams(0,dp(40),1f))
+        head.addView(Button(this).apply{text="×";setOnClickListener{hidePanel()}},LinearLayout.LayoutParams(dp(46),dp(40)))
+        root.addView(head)
+
+        val pair=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        pair.addView(Button(this).apply{text="GOLD";setOnClickListener{switch("XAUUSD",period)}},LinearLayout.LayoutParams(0,dp(42),1f))
+        pair.addView(Button(this).apply{text="BTC";setOnClickListener{switch("BTCUSDT",period)}},LinearLayout.LayoutParams(0,dp(42),1f))
+        root.addView(pair)
+
+        val periods=arrayOf("5m","10m","15m","3m","30m","1h","2h","4h","6h","12h","1day")
+        if(period !in periods)period="15m"
+        val tfRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
+        tfRow.addView(tv("TIMEFRAME",10f,true),LinearLayout.LayoutParams(0,dp(46),1f))
+        val sp=Spinner(this).apply{adapter=ArrayAdapter(this@OverlayService,android.R.layout.simple_spinner_dropdown_item,periods);setSelection(periods.indexOf(period).coerceAtLeast(0))}
+        tfRow.addView(sp,LinearLayout.LayoutParams(dp(145),dp(46)))
+        root.addView(tfRow)
+        sp.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{
+            override fun onItemSelected(parent:AdapterView<*>?,view:android.view.View?,position:Int,id:Long){val p=periods[position];if(p!=period)switch(symbol,p)}
+            override fun onNothingSelected(parent:AdapterView<*>?){}
+        }
+
+        chart=WebView(this).apply{settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK);webViewClient=object:WebViewClient(){override fun onPageFinished(v:WebView?,u:String?){ready=true;loadData()}};loadUrl("file:///android_asset/chart.html")}
+        root.addView(chart,LinearLayout.LayoutParams(-1,dp(360)))
+        root.addView(Button(this).apply{text="NEW ANALYZE";setTextColor(Color.BLACK);setBackgroundColor(Color.WHITE);setOnClickListener{analyze()}},LinearLayout.LayoutParams(-1,dp(46)))
+        status=tv("$symbol • $period",10.5f);root.addView(status)
+        wm.addView(root,WindowManager.LayoutParams(dp(390),dp(700),type(),WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT).apply{gravity=Gravity.TOP or Gravity.END;x=dp(6);y=dp(35)})
+        h.removeCallbacks(refresh);h.postDelayed(refresh,65_000)
+    }
+
+    private fun switch(s:String,p:String){
+        if(symbol==s&&period==p)return
+        symbol=s;period=p;generation++
+        prefs.edit().putString("symbol",s).putString("period",p).apply()
+        data=emptyList();loadedAt=0
+        chart?.evaluateJavascript("clearChart();showMessage(${JSONObject.quote("Loading $symbol • $period…")})",null)
+        status?.text="$symbol • $period • loading"
+        loadData()
+    }
+
     private fun displayed()=SignalStore.loadActive(this,symbol,period)?:SignalStore.openTrades(this).firstOrNull{it.signal.symbol==symbol&&it.signal.timeframe==period}
-    private fun loadData(){if(!ready||busy)return;val k=prefs.getString("api_key","")?.trim().orEmpty();if(k.isBlank()){status?.text="API key missing";return};busy=true;thread{try{val(c,_)=FcsClient.history(k,symbol,period,220,false);data=c;loadedAt=System.currentTimeMillis();SignalStore.evaluate(this,symbol,period,c);Handler(Looper.getMainLooper()).post{busy=false;render(c);showState()}}catch(e:Exception){Handler(Looper.getMainLooper()).post{busy=false;status?.text="Load failed: ${e.message}"}}}}
-    private fun render(c:List<Candle>){val a=JSONArray();c.forEach{a.put(JSONObject().put("t",it.t).put("o",it.o).put("h",it.h).put("l",it.l).put("c",it.c).put("v",it.v))};chart?.evaluateJavascript("renderCandles(${JSONObject.quote(a.toString())},${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null);overlay(displayed())}
-    private fun analyze(){if(busy)return;if(data.isEmpty()||System.currentTimeMillis()-loadedAt>70_000){loadData();status?.text="Refreshing before analysis...";return};SignalStore.evaluate(this,symbol,period,data);val s=AnalysisEngine.analyze(symbol,period,data);if(s==null){status?.text="NO NEW TRADE\n${AnalysisEngine.noSignalReason(symbol,period,data)}";overlay(displayed());return};val dup=SignalStore.findDuplicate(this,s);if(dup!=null){status?.text="NO NEW TRADE • same ${dup.state} setup near ${price(dup.signal.entry)}";overlay(dup);return};SignalStore.acceptCandidate(this,s);startService(Intent(this,AlarmService::class.java));showState();overlay(SignalStore.loadActive(this,symbol,period))}
+
+    private fun loadData(){
+        if(!ready)return
+        if(busy){queued=true;return}
+        val k=prefs.getString("api_key","")?.trim().orEmpty();if(k.isBlank()){status?.text="API key missing";return}
+        busy=true
+        val reqSymbol=symbol;val reqPeriod=period;val reqGen=generation
+        thread{
+            try{
+                val(c,_)=FcsClient.history(k,reqSymbol,reqPeriod,220,false)
+                SignalStore.evaluate(this,reqSymbol,reqPeriod,c)
+                Handler(Looper.getMainLooper()).post{
+                    val current=reqGen==generation&&reqSymbol==symbol&&reqPeriod==period
+                    if(current){data=c;loadedAt=System.currentTimeMillis();render(c,reqSymbol,reqPeriod);showState()}
+                    busy=false
+                    if(queued){queued=false;loadData()}
+                }
+            }catch(e:Exception){Handler(Looper.getMainLooper()).post{if(reqGen==generation&&reqSymbol==symbol&&reqPeriod==period)status?.text="Load failed: ${e.message}";busy=false;if(queued){queued=false;loadData()}}}
+        }
+    }
+
+    private fun render(c:List<Candle>,s:String=symbol,p:String=period){
+        if(s!=symbol||p!=period)return
+        val a=JSONArray();c.forEach{a.put(JSONObject().put("t",it.t).put("o",it.o).put("h",it.h).put("l",it.l).put("c",it.c).put("v",it.v))}
+        chart?.evaluateJavascript("renderCandles(${JSONObject.quote(a.toString())},${JSONObject.quote(s)},${JSONObject.quote(p)})",null)
+        overlay(displayed())
+    }
+
+    private fun analyze(){
+        if(busy){queued=true;status?.text="Waiting for $symbol • $period chart…";return}
+        if(data.isEmpty()||System.currentTimeMillis()-loadedAt>70_000){loadData();status?.text="Refreshing before analysis...";return}
+        SignalStore.evaluate(this,symbol,period,data)
+        val s=AnalysisEngine.analyze(symbol,period,data)
+        if(s==null){status?.text="NO NEW TRADE\n${AnalysisEngine.noSignalReason(symbol,period,data)}";overlay(displayed());return}
+        val dup=SignalStore.findDuplicate(this,s)
+        if(dup!=null){status?.text="NO NEW TRADE • same ${dup.state} setup near ${price(dup.signal.entry)}";overlay(dup);return}
+        SignalStore.acceptCandidate(this,s);startService(Intent(this,AlarmService::class.java));showState();overlay(SignalStore.loadActive(this,symbol,period))
+    }
+
     private fun showState(){val a=displayed();if(a==null){status?.text="$symbol $period • NO CURRENT SETUP";overlay(null);return};val s=a.signal;status?.text="${s.direction} ${s.score}/100 • ${a.state}\nEntry ${price(s.entry)}  SL ${price(s.sl)}  TP1 ${price(s.tp1)}\nBull ${s.bullScore} / Bear ${s.bearScore} • RSI ${String.format(Locale.US,"%.1f",s.rsi)}\n${if(a.state=="ACTIVE")"Triggered/open — tracked to TP/SL" else "Pending — background tracked"}"}
     private fun overlay(a:ActiveSignal?){if(a==null){chart?.evaluateJavascript("setSignal(null)",null);return};val s=a.signal;val j=JSONObject().put("entry",s.entry).put("sl",s.sl).put("tp1",s.tp1).put("tp2",s.tp2).put("state",a.state).put("fvgType",s.fvgType).put("fvgLow",s.fvgLow).put("fvgHigh",s.fvgHigh);chart?.evaluateJavascript("setSignal(${JSONObject.quote(j.toString())})",null)}
-    private fun hidePanel(){h.removeCallbacks(refresh);panel?.let{runCatching{wm.removeView(it)}};panel=null;chart=null;status=null;ready=false}
-    private fun price(v:Double?)=when{v==null->"-";abs(v)>=100->String.format(Locale.US,"%.2f",v);else->String.format(Locale.US,"%.5f",v)};private fun tv(v:String,s:Float,b:Boolean=false)=TextView(this).apply{text=v;textSize=s;setTextColor(Color.WHITE);if(b)setTypeface(typeface,Typeface.BOLD)};private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
+    private fun hidePanel(){h.removeCallbacks(refresh);panel?.let{runCatching{wm.removeView(it)}};panel=null;chart=null;status=null;ready=false;busy=false;queued=false}
+    private fun price(v:Double?)=when{v==null->"-";abs(v)>=100->String.format(Locale.US,"%.2f",v);else->String.format(Locale.US,"%.5f",v)}
+    private fun tv(v:String,s:Float,b:Boolean=false)=TextView(this).apply{text=v;textSize=s;setTextColor(Color.WHITE);if(b)setTypeface(typeface,Typeface.BOLD)}
+    private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
     override fun onDestroy(){h.removeCallbacks(refresh);hidePanel();if(::bubble.isInitialized)runCatching{wm.removeView(bubble)};super.onDestroy()}
 }
