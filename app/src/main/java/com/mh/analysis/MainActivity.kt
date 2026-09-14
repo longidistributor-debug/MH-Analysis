@@ -10,6 +10,7 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.*
 import android.provider.Settings
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.webkit.WebView
@@ -24,45 +25,124 @@ import kotlin.math.abs
 
 class MainActivity:Activity(){
     private val prefs by lazy{getSharedPreferences("mh",MODE_PRIVATE)}
-    private lateinit var key:EditText;private lateinit var chart:WebView;private lateinit var status:TextView;private lateinit var calls:TextView;private lateinit var pairLabel:TextView
-    private var symbol="XAUUSD";private var period="15m";private var chartReady=false;private var busy=false;private var candles:List<Candle> = emptyList();private var loadedSymbol="";private var loadedPeriod="";private var loadedAt=0L
+    private lateinit var keyInput:EditText
+    private lateinit var keyStatus:TextView
+    private lateinit var keyButton:Button
+    private lateinit var chart:WebView
+    private lateinit var status:TextView
+    private lateinit var calls:TextView
+    private lateinit var pairLabel:TextView
+    private var symbol="XAUUSD"
+    private var period="15m"
+    private var chartReady=false
+    private var busy=false
+    private var editingKey=false
+    private var candles:List<Candle> = emptyList()
+    private var loadedSymbol=""
+    private var loadedPeriod=""
+    private var loadedAt=0L
     private val liveHandler=Handler(Looper.getMainLooper())
-    private val liveRefresh=object:Runnable{override fun run(){if(chartReady&&!busy&&key.text.toString().trim().isNotBlank())load(false,true);liveHandler.postDelayed(this,65_000)}}
+    private val liveRefresh=object:Runnable{
+        override fun run(){
+            if(chartReady&&!busy&&savedKey().isNotBlank())load(false,true)
+            liveHandler.postDelayed(this,65_000)
+        }
+    }
 
     override fun onCreate(b:Bundle?){
-        super.onCreate(b);if(Build.VERSION.SDK_INT>=33)requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),12);window.statusBarColor=Color.BLACK;window.navigationBarColor=Color.BLACK
-        symbol=prefs.getString("symbol","XAUUSD")?:"XAUUSD";period=prefs.getString("period","15m")?:"15m";setContentView(ui())
-        if(prefs.getString("api_key","")?.isNotBlank()==true)startStateService()
+        super.onCreate(b)
+        if(Build.VERSION.SDK_INT>=33)requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),12)
+        window.statusBarColor=Color.BLACK;window.navigationBarColor=Color.BLACK
+        symbol=prefs.getString("symbol","XAUUSD")?:"XAUUSD"
+        period=prefs.getString("period","15m")?:"15m"
+        setContentView(ui())
+        if(savedKey().isNotBlank())startStateService()
     }
-    override fun onResume(){super.onResume();liveHandler.removeCallbacks(liveRefresh);liveHandler.postDelayed(liveRefresh,15_000);showExisting();showStalePopupIfNeeded();if(Settings.canDrawOverlays(this)&&prefs.getBoolean("want_float",false)){prefs.edit().putBoolean("want_float",false).apply();startOverlay()}}
+
+    override fun onResume(){
+        super.onResume()
+        liveHandler.removeCallbacks(liveRefresh)
+        if(savedKey().isNotBlank())liveHandler.postDelayed(liveRefresh,15_000)
+        showExisting();showStalePopupIfNeeded()
+        if(Settings.canDrawOverlays(this)&&prefs.getBoolean("want_float",false)){
+            prefs.edit().putBoolean("want_float",false).apply();startOverlay()
+        }
+    }
     override fun onPause(){liveHandler.removeCallbacks(liveRefresh);super.onPause()}
 
     private fun ui():View{
         val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(18),dp(18),dp(28));setBackgroundColor(Color.BLACK)}
         val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
         header.addView(TextView(this).apply{text="MS";gravity=Gravity.CENTER;textSize=22f;setTextColor(Color.WHITE);setTypeface(typeface,Typeface.BOLD);background=round(Color.BLACK,18f,Color.WHITE)},LinearLayout.LayoutParams(dp(64),dp(64)))
-        header.addView(LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0);addView(txt("MH ANALYSIS",26f,true));addView(txt("Gold + BTC Confluence Engine",11f,false,Color.LTGRAY));addView(txt("MS • v5 • PERSISTENT LIVE STATE",10f,true));addView(txt("◉ WhatsApp  +92 343 4824609",11f,false,Color.LTGRAY))},LinearLayout.LayoutParams(0,-2,1f));root.addView(header)
-        root.addView(section("FCS CONNECTION"));val kc=card();key=input("FCS REST Access Key",prefs.getString("api_key","")?:"");kc.addView(key,LinearLayout.LayoutParams(-1,dp(52)));kc.addView(Button(this).apply{text="SAVE KEY + LOAD CHART";setTextColor(Color.BLACK);background=round(Color.WHITE,12f);setOnClickListener{prefs.edit().putString("api_key",key.text.toString().trim()).apply();startStateService();load(false,true)}},LinearLayout.LayoutParams(-1,dp(50)).apply{topMargin=dp(10)});root.addView(kc)
+        header.addView(LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0);addView(txt("MH ANALYSIS",26f,true));addView(txt("Gold + BTC Confluence Engine",11f,false,Color.LTGRAY));addView(txt("MS • v6 • SAVED KEY AUTO-CONNECT",10f,true));addView(txt("◉ WhatsApp  +92 343 4824609",11f,false,Color.LTGRAY))},LinearLayout.LayoutParams(0,-2,1f))
+        root.addView(header)
+
+        root.addView(section("FCS CONNECTION"))
+        val kc=card()
+        keyStatus=txt("",12f,true,Color.LTGRAY);kc.addView(keyStatus)
+        keyInput=input("Enter FCS REST Access Key","").apply{inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD}
+        kc.addView(keyInput,LinearLayout.LayoutParams(-1,dp(52)).apply{topMargin=dp(8)})
+        keyButton=Button(this).apply{setTextColor(Color.BLACK);background=round(Color.WHITE,12f);setOnClickListener{handleKeyButton()}}
+        kc.addView(keyButton,LinearLayout.LayoutParams(-1,dp(50)).apply{topMargin=dp(10)})
+        updateKeyUi();root.addView(kc)
+
         root.addView(section("MARKET"));val mc=card();val row=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
         row.addView(Button(this).apply{text="GOLD\nXAUUSD";setTextColor(Color.BLACK);background=round(Color.WHITE,12f);setOnClickListener{switchPair("XAUUSD")}},LinearLayout.LayoutParams(0,dp(58),1f).apply{rightMargin=dp(6)})
         row.addView(Button(this).apply{text="BTC\nBTCUSDT";setTextColor(Color.BLACK);background=round(Color.WHITE,12f);setOnClickListener{switchPair("BTCUSDT")}},LinearLayout.LayoutParams(0,dp(58),1f).apply{leftMargin=dp(6)});mc.addView(row)
-        val row2=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};pairLabel=txt("$symbol • $period",13f,true);row2.addView(pairLabel,LinearLayout.LayoutParams(0,dp(48),1f));val periods=arrayOf("1m","5m","15m","30m","1h","4h","1D");val sp=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,periods);setSelection(periods.indexOf(period).coerceAtLeast(0))};row2.addView(sp,LinearLayout.LayoutParams(dp(110),dp(48)));mc.addView(row2);root.addView(mc)
-        sp.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){val np=periods[pos];if(np!=period){period=np;prefs.edit().putString("period",period).apply();pairLabel.text="$symbol • $period";candles=emptyList();loadedSymbol="";loadedPeriod="";status.text="TIMEFRAME CHANGED • chart only\nNo trade generated.";if(chartReady&&key.text.toString().trim().isNotBlank())load(false,true)}};override fun onNothingSelected(p:AdapterView<*>?){} }
-        root.addView(section("LIVE INTERACTIVE CHART"));val cc=card();chart=WebView(this).apply{settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK);webViewClient=object:WebViewClient(){override fun onPageFinished(v:WebView?,u:String?){chartReady=true;if(key.text.toString().trim().isNotBlank())load(false,true)}};loadUrl("file:///android_asset/chart.html")};cc.addView(chart,LinearLayout.LayoutParams(-1,dp(520)));cc.addView(txt("Auto-refresh while app is open • pinch/drag • +/-/RESET • EMA20/50 • trend • S/R • FVG • Entry/SL/TP",10f,false,Color.GRAY));root.addView(cc)
-        root.addView(section("ANALYSIS"));val ac=card();calls=txt("Calls: ${usage()}/500",11f,true,Color.LTGRAY);ac.addView(calls);val btns=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};btns.addView(actionButton("NEW ANALYZE",true){newAnalyze()},LinearLayout.LayoutParams(0,dp(54),1f).apply{rightMargin=dp(4)});btns.addView(actionButton("RECORDS",false){showRecords()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(2);rightMargin=dp(2)});btns.addView(actionButton("ALARM",false){alarmAndShow()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(4)});ac.addView(btns,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});status=txt("READY\nSaved signal state survives app close/minimize. Background tracking updates pending/open trades independently of alarm sound.",12f,false).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)};ac.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});root.addView(ac)
+        val row2=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};pairLabel=txt("$symbol • $period",13f,true);row2.addView(pairLabel,LinearLayout.LayoutParams(0,dp(48),1f))
+        val periods=arrayOf("1m","5m","15m","30m","1h","4h","1D")
+        val sp=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,periods);setSelection(periods.indexOf(period).coerceAtLeast(0))};row2.addView(sp,LinearLayout.LayoutParams(dp(110),dp(48)));mc.addView(row2);root.addView(mc)
+        sp.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{
+            override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){val np=periods[pos];if(np!=period){period=np;prefs.edit().putString("period",period).apply();pairLabel.text="$symbol • $period";candles=emptyList();loadedSymbol="";loadedPeriod="";status.text="TIMEFRAME CHANGED • chart only\nNo trade generated.";if(chartReady&&savedKey().isNotBlank())load(false,true)}}
+            override fun onNothingSelected(p:AdapterView<*>?){}
+        }
+
+        root.addView(section("LIVE INTERACTIVE CHART"));val cc=card()
+        chart=WebView(this).apply{
+            settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK)
+            webViewClient=object:WebViewClient(){override fun onPageFinished(v:WebView?,u:String?){chartReady=true;if(savedKey().isNotBlank())load(false,true)}}
+            loadUrl("file:///android_asset/chart.html")
+        }
+        cc.addView(chart,LinearLayout.LayoutParams(-1,dp(520)));cc.addView(txt("Auto-connect with saved key • auto-refresh • pinch/drag • +/-/RESET • EMA20/50 • trend • S/R • FVG • Entry/SL/TP",10f,false,Color.GRAY));root.addView(cc)
+
+        root.addView(section("ANALYSIS"));val ac=card();calls=txt("Calls: ${usage()}/500",11f,true,Color.LTGRAY);ac.addView(calls)
+        val btns=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        btns.addView(actionButton("NEW ANALYZE",true){newAnalyze()},LinearLayout.LayoutParams(0,dp(54),1f).apply{rightMargin=dp(4)})
+        btns.addView(actionButton("RECORDS",false){showRecords()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(2);rightMargin=dp(2)})
+        btns.addView(actionButton("ALARM",false){alarmAndShow()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(4)});ac.addView(btns,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)})
+        status=txt("READY\nAfter one API-key save, the app reconnects automatically on every launch. The key is never shown again unless you choose UPDATE KEY.",12f,false).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)}
+        ac.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});root.addView(ac)
+
         root.addView(section("FLOATING MODE"));val fc=card();fc.addView(Button(this).apply{text="ENABLE MS LIVE FLOAT";setTextColor(Color.WHITE);background=round(Color.rgb(25,25,25),12f,Color.GRAY);setOnClickListener{enableFloat()}},LinearLayout.LayoutParams(-1,dp(52)));root.addView(fc)
         return ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.BLACK);addView(root)}
     }
 
-    private fun switchPair(s:String){if(symbol==s)return;symbol=s;prefs.edit().putString("symbol",s).apply();pairLabel.text="$symbol • $period";candles=emptyList();loadedSymbol="";loadedPeriod="";chart.evaluateJavascript("clearChart()",null);status.text="SWITCHED TO $symbol • chart only";load(false,true)}
+    private fun savedKey()=prefs.getString("api_key","")?.trim().orEmpty()
+    private fun updateKeyUi(){
+        val saved=savedKey().isNotBlank()
+        if(saved&&!editingKey){keyInput.setText("");keyInput.visibility=View.GONE;keyStatus.text="● API KEY SAVED • AUTO-CONNECT ENABLED";keyButton.text="UPDATE KEY"}
+        else{keyInput.visibility=View.VISIBLE;keyInput.setText("");keyStatus.text=if(saved)"ENTER NEW KEY • OLD KEY REMAINS ACTIVE UNTIL YOU SAVE" else "API KEY REQUIRED • ENTER ONCE AND SAVE";keyButton.text=if(saved)"SAVE NEW KEY" else "SAVE KEY"}
+    }
+    private fun handleKeyButton(){
+        val saved=savedKey().isNotBlank()
+        if(saved&&!editingKey){editingKey=true;updateKeyUi();keyInput.requestFocus();return}
+        val entered=keyInput.text.toString().trim()
+        if(entered.isBlank()){Toast.makeText(this,"Enter a valid API key",Toast.LENGTH_SHORT).show();return}
+        prefs.edit().putString("api_key",entered).apply();keyInput.setText("");editingKey=false;updateKeyUi();startStateService()
+        Toast.makeText(this,"API key saved permanently for this installation",Toast.LENGTH_SHORT).show()
+        if(chartReady)load(true,true)
+    }
+
+    private fun switchPair(s:String){if(symbol==s)return;symbol=s;prefs.edit().putString("symbol",s).apply();pairLabel.text="$symbol • $period";candles=emptyList();loadedSymbol="";loadedPeriod="";chart.evaluateJavascript("clearChart()",null);status.text="SWITCHED TO $symbol • chart only";if(savedKey().isNotBlank())load(false,true)}
     private fun load(force:Boolean,passive:Boolean=false,after:(()->Unit)?=null){
-        if(busy||!chartReady)return;val k=key.text.toString().trim();if(k.isBlank()){status.text="FCS KEY REQUIRED";return};busy=true
+        if(busy||!chartReady)return;val k=savedKey();if(k.isBlank()){status.text="API KEY REQUIRED\nEnter it once and press SAVE KEY.";return};busy=true
         thread{try{val(data,credits)=FcsClient.history(k,symbol,period,220,force);candles=data;loadedSymbol=symbol;loadedPeriod=period;loadedAt=System.currentTimeMillis();val eval=SignalStore.evaluate(this,symbol,period,data);runOnUiThread{if(credits>0)addUsage(credits);calls.text="Calls: ${usage()}/500";render(data);pairLabel.text="$symbol • $period";busy=false;if(!passive&&eval!=null&&eval.state in setOf("WIN","LOSS","EXPIRED"))status.text="${eval.state} • record updated" else showExisting();after?.invoke()}}catch(e:Exception){runOnUiThread{busy=false;status.text="LOAD FAILED\n${e.message}"}}}
     }
     private fun render(data:List<Candle>){val a=JSONArray();data.forEach{a.put(JSONObject().put("t",it.t).put("o",it.o).put("h",it.h).put("l",it.l).put("c",it.c).put("v",it.v))};chart.evaluateJavascript("renderCandles(${JSONObject.quote(a.toString())},${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null);showSignalOverlay(currentDisplayedSignal())}
     private fun currentDisplayedSignal():ActiveSignal?=SignalStore.loadActive(this,symbol,period)?:SignalStore.openTrades(this).firstOrNull{it.signal.symbol==symbol&&it.signal.timeframe==period}
 
     private fun newAnalyze(){
+        if(savedKey().isBlank()){Toast.makeText(this,"Save API key once first",Toast.LENGTH_SHORT).show();return}
         if(busy)return;val have=candles.isNotEmpty()&&loadedSymbol==symbol&&loadedPeriod==period&&System.currentTimeMillis()-loadedAt<70_000
         if(!have){status.text="REFRESHING DATA BEFORE ANALYSIS...";load(false,false){newAnalyze()};return}
         SignalStore.evaluate(this,symbol,period,candles);val s=AnalysisEngine.analyze(symbol,period,candles)
@@ -89,14 +169,21 @@ class MainActivity:Activity(){
         spinner.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){refresh()};override fun onNothingSelected(p:AdapterView<*>?){} };outer.addView(spinner);outer.addView(ScrollView(this).apply{addView(listBox)},LinearLayout.LayoutParams(-1,dp(420)));AlertDialog.Builder(this).setTitle("MS Pending Alarms").setView(outer).setNegativeButton("Close",null).setNeutralButton("Reset Alarms"){_,_->AlarmStore.reset(this)}.show()
     }
 
-    private fun showStalePopupIfNeeded(){val a=currentDisplayedSignal()?:return;if(!SignalStore.isStale(a))return;val key="stale_${a.signal.id}";if(prefs.getBoolean(key,false))return;prefs.edit().putBoolean(key,true).apply();AlertDialog.Builder(this).setTitle("OLD SETUP").setMessage("This saved ${a.signal.symbol} ${a.signal.timeframe} setup is old. Its previous state is preserved for Records, but do not treat it as a fresh trade. Tap NEW ANALYZE to get a fresh market assessment.").setPositiveButton("NEW ANALYZE"){_,_->newAnalyze()}.setNegativeButton("✕ CLOSE",null).show()}
-    private fun startStateService(){val i=Intent(this,AlarmService::class.java);if(Build.VERSION.SDK_INT>=26)startForegroundService(i)else startService(i)}
-    private fun enableFloat(){val k=key.text.toString().trim();if(k.isBlank()){Toast.makeText(this,"Enter FCS key first",Toast.LENGTH_LONG).show();return};prefs.edit().putString("api_key",k).apply();if(!Settings.canDrawOverlays(this)){prefs.edit().putBoolean("want_float",true).apply();startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName")))}else startOverlay()}
+    private fun showStalePopupIfNeeded(){val a=currentDisplayedSignal()?:return;if(!SignalStore.isStale(a))return;val k="stale_${a.signal.id}";if(prefs.getBoolean(k,false))return;prefs.edit().putBoolean(k,true).apply();AlertDialog.Builder(this).setTitle("OLD SETUP").setMessage("This saved ${a.signal.symbol} ${a.signal.timeframe} setup is old. Its previous state is preserved for Records, but do not treat it as a fresh trade. Tap NEW ANALYZE to get a fresh market assessment.").setPositiveButton("NEW ANALYZE"){_,_->newAnalyze()}.setNegativeButton("✕ CLOSE",null).show()}
+    private fun startStateService(){if(savedKey().isBlank())return;val i=Intent(this,AlarmService::class.java);if(Build.VERSION.SDK_INT>=26)startForegroundService(i)else startService(i)}
+    private fun enableFloat(){if(savedKey().isBlank()){Toast.makeText(this,"Save API key once first",Toast.LENGTH_LONG).show();return};if(!Settings.canDrawOverlays(this)){prefs.edit().putBoolean("want_float",true).apply();startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName")))}else startOverlay()}
     private fun startOverlay(){val i=Intent(this,OverlayService::class.java);if(Build.VERSION.SDK_INT>=26)startForegroundService(i)else startService(i);Toast.makeText(this,"MS floating mode active",Toast.LENGTH_SHORT).show()}
     private fun actionButton(label:String,primary:Boolean,click:()->Unit)=Button(this).apply{text=label;textSize=11f;setTypeface(typeface,Typeface.BOLD);setTextColor(if(primary)Color.BLACK else Color.WHITE);background=if(primary)round(Color.WHITE,12f)else round(Color.rgb(24,24,24),12f,Color.GRAY);setOnClickListener{click()}}
     private fun lastThreeDays():List<String>{val f=SimpleDateFormat("yyyy-MM-dd",Locale.US);val cal=Calendar.getInstance();return (0..2).map{d->val c=cal.clone() as Calendar;c.add(Calendar.DAY_OF_YEAR,-d);f.format(c.time)}}
-    private fun month()=SimpleDateFormat("yyyy-MM",Locale.US).format(Date());private fun usage():Int{val m=month();if(prefs.getString("usage_month","")!=m)prefs.edit().putString("usage_month",m).putInt("usage",0).apply();return prefs.getInt("usage",0)};private fun addUsage(n:Int){prefs.edit().putInt("usage",usage()+n.coerceAtLeast(0)).apply()}
-    private fun time(ms:Long)=SimpleDateFormat("dd MMM HH:mm",Locale.US).format(Date(ms));private fun price(v:Double?)=if(v==null)"-" else if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
+    private fun month()=SimpleDateFormat("yyyy-MM",Locale.US).format(Date())
+    private fun usage():Int{val m=month();if(prefs.getString("usage_month","")!=m)prefs.edit().putString("usage_month",m).putInt("usage",0).apply();return prefs.getInt("usage",0)}
+    private fun addUsage(n:Int){prefs.edit().putInt("usage",usage()+n.coerceAtLeast(0)).apply()}
+    private fun time(ms:Long)=SimpleDateFormat("dd MMM HH:mm",Locale.US).format(Date(ms))
+    private fun price(v:Double?)=if(v==null)"-" else if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
     private fun input(h:String,v:String)=EditText(this).apply{hint=h;setHintTextColor(Color.GRAY);setTextColor(Color.WHITE);textSize=13f;setSingleLine(true);setText(v);background=round(Color.rgb(20,20,20),12f,Color.DKGRAY);setPadding(dp(14),0,dp(14),0)}
-    private fun section(s:String)=txt(s,11f,true,Color.GRAY).apply{setPadding(0,dp(18),0,dp(8))};private fun card()=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(14),dp(14),dp(14));background=round(Color.rgb(8,8,8),16f,Color.rgb(45,45,45))};private fun txt(s:String,z:Float,b:Boolean=false,c:Int=Color.WHITE)=TextView(this).apply{text=s;textSize=z;setTextColor(c);if(b)setTypeface(typeface,Typeface.BOLD)};private fun round(c:Int,r:Float,stroke:Int?=null)=GradientDrawable().apply{setColor(c);cornerRadius=dp(r.toInt()).toFloat();if(stroke!=null)setStroke(dp(1),stroke)};private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
+    private fun section(s:String)=txt(s,11f,true,Color.GRAY).apply{setPadding(0,dp(18),0,dp(8))}
+    private fun card()=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),dp(14),dp(14),dp(14));background=round(Color.rgb(8,8,8),16f,Color.rgb(45,45,45))}
+    private fun txt(s:String,z:Float,b:Boolean=false,c:Int=Color.WHITE)=TextView(this).apply{text=s;textSize=z;setTextColor(c);if(b)setTypeface(typeface,Typeface.BOLD)}
+    private fun round(c:Int,r:Float,stroke:Int?=null)=GradientDrawable().apply{setColor(c);cornerRadius=dp(r.toInt()).toFloat();if(stroke!=null)setStroke(dp(1),stroke)}
+    private fun dp(v:Int)=(v*resources.displayMetrics.density).toInt()
 }
