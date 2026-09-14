@@ -19,7 +19,7 @@ class AlarmService:Service(){
         super.onCreate()
         createChannels()
         startForeground(311,serviceNotification("Watching armed MH signals"))
-        thread{name="mh-alarm-monitor";monitorLoop()}
+        thread(name="mh-alarm-monitor"){monitorLoop()}
     }
 
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
