@@ -157,7 +157,7 @@ object AnalysisEngine {
     }
 
     private fun tfMinutes(tf:String)=when(tf.lowercase(Locale.US)){
-        "3m"->3;"5m"->5;"10m"->10;"15m"->15;"30m"->30;"1h"->60;"2h"->120;"4h"->240;"6h"->360;"12h"->720;"1d"->1440;else->15
+        "3m"->3;"5m"->5;"10m"->10;"15m"->15;"30m"->30;"1h"->60;"2h"->120;"4h"->240;"6h"->360;"12h"->720;"1d","1day"->1440;else->15
     }
     private fun one(v:Double)=String.format(Locale.US,"%.1f",v);private fun two(v:Double)=String.format(Locale.US,"%.2f",v)
     private fun fmt(v:Double?)=if(v==null)"-" else if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
