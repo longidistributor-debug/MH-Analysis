@@ -101,7 +101,7 @@ class MainActivity:Activity(){
             orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0)
             addView(txt("MH ANALYSIS",26f,true))
             addView(txt("Gold + BTC Confluence Engine",11f,false,Color.LTGRAY))
-            addView(txt("MS • v7 • INSTANT TIMEFRAME SWITCH",10f,true))
+            addView(txt("MS • v8 • INDEPENDENT TIMEFRAME CHARTS",10f,true))
             addView(txt("◉ WhatsApp  +92 343 4824609",11f,false,Color.LTGRAY))
         },LinearLayout.LayoutParams(0,-2,1f))
         root.addView(header)
@@ -131,12 +131,13 @@ class MainActivity:Activity(){
         val row2=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
         pairLabel=txt("$symbol • $period",13f,true)
         row2.addView(pairLabel,LinearLayout.LayoutParams(0,dp(48),1f))
-        val periods=arrayOf("1m","5m","15m","30m","1h","4h","1D")
+        val periods=arrayOf("5m","10m","15m","3m","30m","1h","2h","4h","6h","12h","1day")
+        if(period !in periods)period="15m"
         val sp=Spinner(this).apply{
             adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,periods)
             setSelection(periods.indexOf(period).coerceAtLeast(0))
         }
-        row2.addView(sp,LinearLayout.LayoutParams(dp(110),dp(48)))
+        row2.addView(sp,LinearLayout.LayoutParams(dp(135),dp(48)))
         mc.addView(row2);root.addView(mc)
 
         sp.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{
@@ -167,7 +168,7 @@ class MainActivity:Activity(){
             loadUrl("file:///android_asset/chart.html")
         }
         cc.addView(chart,LinearLayout.LayoutParams(-1,dp(520)))
-        cc.addView(txt("Auto-connect • live refresh • instant timeframe switch • pinch/drag • +/-/RESET • EMA20/50 • trend • S/R • FVG • Entry/SL/TP",10f,false,Color.GRAY))
+        cc.addView(txt("Every timeframe loads its own candles, indicators and signal state • auto-connect • live refresh • pinch/drag • +/-/RESET • EMA20/50 • trend • S/R • FVG • Entry/SL/TP",10f,false,Color.GRAY))
         root.addView(cc)
 
         root.addView(section("ANALYSIS"))
@@ -178,7 +179,7 @@ class MainActivity:Activity(){
         btns.addView(actionButton("RECORDS",false){showRecords()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(2);rightMargin=dp(2)})
         btns.addView(actionButton("ALARM",false){alarmAndShow()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(4)})
         ac.addView(btns,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)})
-        status=txt("READY\nSaved key auto-connect is enabled. Switching timeframe only reloads that chart; it never creates a trade.",12f,false).apply{
+        status=txt("READY\nEach timeframe is isolated. Switching timeframe reloads that timeframe's own graph and existing setup only; it never copies another timeframe's trade.",12f,false).apply{
             setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)
         }
         ac.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)})
