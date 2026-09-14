@@ -51,7 +51,7 @@ object FcsClient {
         "4h"->PeriodPlan("4h",1)
         "6h"->PeriodPlan("1h",6)
         "12h"->PeriodPlan("1h",12)
-        "1d"->PeriodPlan("1D",1)
+        "1d","1day"->PeriodPlan("1D",1)
         else->PeriodPlan(period,1)
     }
 
@@ -101,7 +101,7 @@ object FcsClient {
     }
 
     private fun normalizePeriod(p:String)=when(p.trim().lowercase()){
-        "1m"->"1m";"5m"->"5m";"15m"->"15m";"30m"->"30m";"1h"->"1h";"4h"->"4h";"1d"->"1D";else->p
+        "1m"->"1m";"5m"->"5m";"15m"->"15m";"30m"->"30m";"1h"->"1h";"4h"->"4h";"1d","1day"->"1D";else->p
     }
     private fun enc(s:String)=URLEncoder.encode(s,"UTF-8")
 }
