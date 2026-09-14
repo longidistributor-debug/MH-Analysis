@@ -22,6 +22,6 @@ data class TradeRecord(
 
 data class AlarmEntry(
     val id:String,val signalId:String,val symbol:String,val timeframe:String,val direction:String,
-    val entry:Double,val expiresAt:Long,val createdAt:Long,val enabled:Boolean=true,
-    val status:String="ARMED",val triggeredAt:Long?=null
+    val entry:Double,val expiresAt:Long,val createdAt:Long,val enabled:Boolean=false,
+    val status:String="SAVED",val triggeredAt:Long?=null,val armedAt:Long?=null
 )
