@@ -1,0 +1,130 @@
+package com.mh.analysis
+
+import android.app.*
+import android.content.Intent
+import android.media.RingtoneManager
+import android.os.*
+import androidx.core.app.NotificationCompat
+import java.util.Locale
+import kotlin.concurrent.thread
+import kotlin.math.abs
+
+class AlarmService:Service(){
+    private val prefs by lazy{getSharedPreferences("mh",MODE_PRIVATE)}
+    @Volatile private var running=true
+    private var index=0
+
+    override fun onBind(intent:Intent?):IBinder?=null
+
+    override fun onCreate(){
+        super.onCreate()
+        createChannels()
+        startForeground(311,serviceNotification("Watching armed MH signals"))
+        thread{name="mh-alarm-monitor";monitorLoop()}
+    }
+
+    override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{
+        if(intent?.action=="STOP"){
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        return START_STICKY
+    }
+
+    private fun monitorLoop(){
+        while(running){
+            try{
+                val now=System.currentTimeMillis()
+                val all=AlarmStore.list(this)
+                all.filter{it.status=="ARMED"&&now>=it.expiresAt}.forEach{
+                    AlarmStore.update(this,it.copy(enabled=false,status="EXPIRED"))
+                    notifyState(it.copy(status="EXPIRED"),"Signal expired before entry was reached")
+                }
+                val armed=AlarmStore.armed(this)
+                if(armed.isEmpty()){
+                    updateService("No armed signals")
+                    Thread.sleep(15_000)
+                    continue
+                }
+                val symbols=armed.map{it.symbol}.distinct()
+                val symbol=symbols[index%symbols.size]
+                index++
+                val key=prefs.getString("api_key","")?.trim().orEmpty()
+                if(key.isBlank()){
+                    updateService("FCS key missing")
+                    Thread.sleep(20_000)
+                    continue
+                }
+                val data=FcsClient.history(key,symbol,"1m",80,false).first
+                val last=data.lastOrNull()
+                if(last!=null){
+                    armed.filter{it.symbol==symbol}.forEach{a->
+                        if(System.currentTimeMillis()>=a.expiresAt){
+                            val ex=a.copy(enabled=false,status="EXPIRED")
+                            AlarmStore.update(this,ex)
+                            notifyState(ex,"Signal expired before entry was reached")
+                        }else if(last.l<=a.entry&&last.h>=a.entry){
+                            val hit=a.copy(enabled=false,status="TRIGGERED",triggeredAt=System.currentTimeMillis())
+                            AlarmStore.update(this,hit)
+                            fireThreeCycles(hit)
+                        }
+                    }
+                }
+                updateService("Watching ${AlarmStore.armed(this).size} armed signal(s)")
+            }catch(_:Exception){ }
+            try{Thread.sleep(30_000)}catch(_:InterruptedException){break}
+        }
+    }
+
+    private fun fireThreeCycles(a:AlarmEntry){
+        notifyState(a,"Entry reached at ${price(a.entry)} • ${a.symbol} ${a.timeframe}")
+        val uri=RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)?:RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        for(i in 1..3){
+            val ring=runCatching{RingtoneManager.getRingtone(this,uri)}.getOrNull()
+            runCatching{ring?.play()}
+            try{Thread.sleep(2500)}catch(_:InterruptedException){}
+            runCatching{ring?.stop()}
+            if(i<3)try{Thread.sleep(1800)}catch(_:InterruptedException){}
+        }
+    }
+
+    private fun createChannels(){
+        if(Build.VERSION.SDK_INT>=26){
+            val nm=getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(NotificationChannel("mh_alarm_service","MH Signal Watch",NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(NotificationChannel("mh_alarm_alert","MH Signal Alerts",NotificationManager.IMPORTANCE_HIGH).apply{enableVibration(true)})
+        }
+    }
+
+    private fun serviceNotification(text:String):Notification{
+        val stop=Intent(this,AlarmService::class.java).apply{action="STOP"}
+        val pi=PendingIntent.getService(this,91,stop,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Builder(this,"mh_alarm_service")
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("MH Analysis Alarm")
+            .setContentText(text)
+            .setOngoing(true)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel,"Stop",pi)
+            .build()
+    }
+
+    private fun updateService(text:String){
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(311,serviceNotification(text))
+    }
+
+    private fun notifyState(a:AlarmEntry,text:String){
+        val n=NotificationCompat.Builder(this,"mh_alarm_alert")
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("${a.symbol} ${a.timeframe} • ${a.status}")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs(a.id.hashCode()),n)
+    }
+
+    private fun price(v:Double)=if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
+
+    override fun onDestroy(){running=false;super.onDestroy()}
+}
