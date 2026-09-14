@@ -8,6 +8,8 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 object AnalysisEngine {
+    data class SetupCheck(val valid:Boolean,val reason:String)
+
     fun analyze(symbol:String,timeframe:String,c:List<Candle>):Signal?{
         if(c.size<80)return null
         val close=c.map{it.c}
@@ -110,34 +112,63 @@ object AnalysisEngine {
         val rawTp1=if(dir=="BUY")entry+a*tp1Atr else entry-a*tp1Atr
         val rawTp2=if(dir=="BUY")entry+a*tp2Atr else entry-a*tp2Atr
         val nearestStructure=if(dir=="BUY") listOf(localHigh,priorHigh,swingHigh).filter{it>entry+a*.25}.minOrNull() else listOf(localLow,priorLow,swingLow).filter{it<entry-a*.25}.maxOrNull()
-        val tp1=if(nearestStructure!=null){
-            if(dir=="BUY")min(rawTp1,nearestStructure) else max(rawTp1,nearestStructure)
-        } else rawTp1
+        val tp1=if(nearestStructure!=null){if(dir=="BUY")min(rawTp1,nearestStructure) else max(rawTp1,nearestStructure)} else rawTp1
         val tp2Structure=if(dir=="BUY") listOf(priorHigh,swingHigh).filter{it>tp1+a*.20}.minOrNull() else listOf(priorLow,swingLow).filter{it<tp1-a*.20}.maxOrNull()
-        val tp2=if(tp2Structure!=null){
-            if(dir=="BUY")min(rawTp2,tp2Structure) else max(rawTp2,tp2Structure)
-        } else rawTp2
+        val tp2=if(tp2Structure!=null){if(dir=="BUY")min(rawTp2,tp2Structure) else max(rawTp2,tp2Structure)} else rawTp2
 
-        val entryDistanceAtr=abs(last.c-entry)/a
-        var valid=when{
-            tf<=1 -> if(entryDistanceAtr>.8)3 else 2
-            tf<=5 -> when{entryDistanceAtr>.9->4;score>=82->3;else->2}
-            tf<=15 -> when{entryDistanceAtr>.9->3;score>=82->2;else->1}
-            tf<=30 -> if(entryDistanceAtr>.8)3 else 2
-            tf<=60 -> if(entryDistanceAtr>.8)2 else 1
-            else -> 1
-        }
-        if(score<65)valid=min(valid,2)
-        valid=valid.coerceIn(1,6)
-
-        val validityReason="Valid for $valid candle${if(valid==1)"" else "s"} because entry is ${two(entryDistanceAtr)} ATR from current price, confidence is $score/100, and the selected timeframe is $timeframe. Validity is dynamic, not fixed."
+        val validityReason="No fixed candle or clock expiry is used. This setup stays pending only while its directional confirmations and structure remain valid. It becomes TRIGGERED when entry is reached, or EXPIRED if confirmation/structure changes before entry."
         val slReason="SL is ${two(risk/a)} ATR from entry. It uses recent local structure plus a timeframe volatility cap so short-timeframe stops do not become unnecessarily wide."
         val tp1Reason=if(nearestStructure!=null)"TP1 is limited by the nearest directional structure/liquidity level and the $timeframe ATR target cap (${two(tp1Atr)} ATR)." else "TP1 uses the $timeframe ATR target cap (${two(tp1Atr)} ATR) because no closer valid structure target was found."
         val tp2Reason=if(tp2Structure!=null)"TP2 is limited by the next structure/liquidity level and the $timeframe extended ATR cap (${two(tp2Atr)} ATR)." else "TP2 uses the $timeframe extended ATR cap (${two(tp2Atr)} ATR) because no closer second structure target was found."
-        val setupReason="$dir exists because directional evidence is $win vs $lose (difference $sep). The engine requires several independent confirmations; it does not force a signal when evidence is balanced."
+        val setupReason="$dir exists because directional evidence is $win vs $lose (difference $sep) across the recent movement, trend, momentum, structure, liquidity and imbalance context. The engine does not force a signal when evidence is balanced."
         val reasons=(if(dir=="BUY")br else sr).sortedByDescending{it.first}.take(8).map{"${it.second} (+${it.first})"}
 
-        return Signal(UUID.randomUUID().toString(),symbol,timeframe,dir,entry,sl,tp1,tp2,score,bull,bear,valid,System.currentTimeMillis(),last.t,"PENDING",reasons,e20,e50,r,macd,a,fvgType,fvgLow,fvgHigh,validityReason,slReason,tp1Reason,tp2Reason,setupReason)
+        return Signal(UUID.randomUUID().toString(),symbol,timeframe,dir,entry,sl,tp1,tp2,score,bull,bear,0,System.currentTimeMillis(),last.t,"PENDING",reasons,e20,e50,r,macd,a,fvgType,fvgLow,fvgHigh,validityReason,slReason,tp1Reason,tp2Reason,setupReason)
+    }
+
+    fun sameSetup(a:Signal,b:Signal):Boolean{
+        if(a.symbol!=b.symbol||a.timeframe!=b.timeframe||a.direction!=b.direction)return false
+        val atr=max(a.atr,b.atr).coerceAtLeast(1e-9)
+        val entryClose=abs(a.entry-b.entry)<=atr*.45
+        val slClose=abs(a.sl-b.sl)<=atr*.70
+        val fvgMatch=when{
+            a.fvgType==null&&b.fvgType==null->true
+            a.fvgType!=b.fvgType->false
+            a.fvgLow!=null&&a.fvgHigh!=null&&b.fvgLow!=null&&b.fvgHigh!=null -> max(a.fvgLow,b.fvgLow)<=min(a.fvgHigh,b.fvgHigh)+atr*.12
+            else->true
+        }
+        val ar=a.reasons.map{it.substringBefore(" (+")}.toSet()
+        val br=b.reasons.map{it.substringBefore(" (+")}.toSet()
+        val overlap=ar.intersect(br).size
+        return entryClose&&slClose&&fvgMatch&&overlap>=2
+    }
+
+    fun setupCheck(s:Signal,c:List<Candle>):SetupCheck{
+        if(c.size<40)return SetupCheck(true,"Not enough fresh history to invalidate the setup.")
+        val last=c.last()
+        if(s.direction=="BUY"&&last.c<s.sl)return SetupCheck(false,"BUY setup invalidated: price closed below its structural invalidation / SL level.")
+        if(s.direction=="SELL"&&last.c>s.sl)return SetupCheck(false,"SELL setup invalidated: price closed above its structural invalidation / SL level.")
+        val close=c.map{it.c}
+        val e20=ema(close,20).last();val e50=ema(close,50).last();val r=rsi(close,14)
+        val m=ema(close,12).last()-ema(close,26).last()
+        val prior=c.takeLast(14).dropLast(1)
+        val priorLow=prior.minOf{it.l};val priorHigh=prior.maxOf{it.h}
+        var opposite=0
+        if(s.direction=="BUY"){
+            if(e20<e50)opposite++
+            if(r<47)opposite++
+            if(m<0)opposite++
+            if(last.c<priorLow)opposite+=2
+            if(s.fvgType=="BULLISH"&&s.fvgLow!=null&&last.c<s.fvgLow)opposite++
+        }else{
+            if(e20>e50)opposite++
+            if(r>53)opposite++
+            if(m>0)opposite++
+            if(last.c>priorHigh)opposite+=2
+            if(s.fvgType=="BEARISH"&&s.fvgHigh!=null&&last.c>s.fvgHigh)opposite++
+        }
+        return if(opposite>=3) SetupCheck(false,"Setup expired because core confirmation changed: trend/momentum/structure no longer support the original ${s.direction} idea.")
+        else SetupCheck(true,"Original ${s.direction} confirmation is still structurally valid. No fixed time expiry is applied.")
     }
 
     fun noSignalReason(symbol:String,timeframe:String,c:List<Candle>):String{
