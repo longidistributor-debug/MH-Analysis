@@ -4,7 +4,6 @@ import android.app.*
 import android.content.Intent
 import android.media.RingtoneManager
 import android.os.*
-import androidx.core.app.NotificationCompat
 import java.util.Locale
 import kotlin.concurrent.thread
 import kotlin.math.abs
@@ -37,8 +36,9 @@ class AlarmService:Service(){
                 val now=System.currentTimeMillis()
                 val all=AlarmStore.list(this)
                 all.filter{it.status=="ARMED"&&now>=it.expiresAt}.forEach{
-                    AlarmStore.update(this,it.copy(enabled=false,status="EXPIRED"))
-                    notifyState(it.copy(status="EXPIRED"),"Signal expired before entry was reached")
+                    val ex=it.copy(enabled=false,status="EXPIRED")
+                    AlarmStore.update(this,ex)
+                    notifyState(ex,"Signal expired before entry was reached")
                 }
                 val armed=AlarmStore.armed(this)
                 if(armed.isEmpty()){
@@ -96,15 +96,17 @@ class AlarmService:Service(){
         }
     }
 
+    private fun builder(channel:String):Notification.Builder = if(Build.VERSION.SDK_INT>=26) Notification.Builder(this,channel) else Notification.Builder(this)
+
     private fun serviceNotification(text:String):Notification{
         val stop=Intent(this,AlarmService::class.java).apply{action="STOP"}
         val pi=PendingIntent.getService(this,91,stop,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this,"mh_alarm_service")
+        return builder("mh_alarm_service")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle("MH Analysis Alarm")
             .setContentText(text)
             .setOngoing(true)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel,"Stop",pi)
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel,"Stop",pi).build())
             .build()
     }
 
@@ -113,12 +115,11 @@ class AlarmService:Service(){
     }
 
     private fun notifyState(a:AlarmEntry,text:String){
-        val n=NotificationCompat.Builder(this,"mh_alarm_alert")
+        val n=builder("mh_alarm_alert")
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle("${a.symbol} ${a.timeframe} • ${a.status}")
             .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setStyle(Notification.BigTextStyle().bigText(text))
             .setAutoCancel(true)
             .build()
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs(a.id.hashCode()),n)
