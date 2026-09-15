@@ -16,7 +16,7 @@ class AlarmService:Service(){
     private var lastStructureCheck=0L
 
     override fun onBind(intent:Intent?):IBinder?=null
-    override fun onCreate(){super.onCreate();createChannels();startForeground(311,serviceNotification("Background market-state monitor active"));thread(name="mh-state-monitor"){monitorLoop()}}
+    override fun onCreate(){super.onCreate();createChannels();startForeground(311,serviceNotification("Live market feed + signal monitor active"));thread(name="mh-state-monitor"){monitorLoop()}}
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{if(intent?.action=="STOP"){stopSelf();return START_NOT_STICKY};return START_STICKY}
 
     private fun monitorLoop(){
@@ -24,16 +24,31 @@ class AlarmService:Service(){
             try{
                 val key=prefs.getString("api_key","")?.trim().orEmpty()
                 if(key.isBlank()){updateService("Data key missing");sleep(20_000);continue}
+
+                // Keep the user's currently selected chart feed alive even when there is no signal
+                // and even when the main Activity is minimized/closed. FcsClient shares the cache
+                // with MainActivity and OverlayService, so this does not create duplicate requests
+                // while the exact feed is still fresh.
+                val selectedSymbol=prefs.getString("symbol","XAUUSD")?:"XAUUSD"
+                val selectedTf=prefs.getString("period","15m")?:"15m"
+                runCatching{FcsClient.history(key,selectedSymbol,selectedTf,220,false)}
+
                 val pending=SignalStore.pendingSignals(this);val open=SignalStore.openTrades(this);val armed=AlarmStore.armed(this)
                 val symbols=(pending.map{it.signal.symbol}+open.map{it.signal.symbol}+armed.map{it.symbol}).distinct()
-                if(symbols.isEmpty()){updateService("No pending/open signals • service ready");sleep(25_000);continue}
+                if(symbols.isEmpty()){
+                    updateService("Live $selectedSymbol $selectedTf feed active • no open signal")
+                    sleep(8_000);continue
+                }
 
                 val symbol=symbols[symbolIndex%symbols.size];symbolIndex++
                 val armedBefore=AlarmStore.armed(this).filter{it.symbol==symbol}.associateBy{it.signalId}
 
-                // Do not let the background service steal a quota slot from the visible chart.
-                // Use an already-fetched real 1m feed first; only request if absolutely no 1m data exists.
-                val oneMin=FcsClient.peek(symbol,"1m",180) ?: runCatching{FcsClient.history(key,symbol,"1m",180,false).first}.getOrNull()
+                // IMPORTANT: actively refresh the 1m lifecycle feed. Earlier builds used peek()
+                // whenever a cached feed existed, which meant the background monitor could keep
+                // reading one old candle forever. history() returns cache while fresh and requests
+                // a real new feed when the shared provider slot becomes available.
+                val oneMin=runCatching{FcsClient.history(key,symbol,"1m",180,false).first}
+                    .getOrElse{FcsClient.peek(symbol,"1m",180)}
                 val last=oneMin?.lastOrNull()
                 if(last!=null){
                     if(AnalysisEngine.isHighVolatility(oneMin)){
@@ -56,14 +71,16 @@ class AlarmService:Service(){
                     }
                 }
 
-                // Validate pending setup structure from that signal's exact timeframe feed.
-                // Cache-first means 1m/5m/15m/30m/1h remain independent without quota fights.
+                // Validate pending structure on the signal's own timeframe using an actively
+                // refreshed real feed. If quota is temporarily full, FcsClient returns the latest
+                // real cached feed rather than killing the lifecycle.
                 val now=System.currentTimeMillis()
                 if(now-lastStructureCheck>=45_000L){
                     val tfPending=SignalStore.pendingSignals(this)
                     if(tfPending.isNotEmpty()){
                         val a=tfPending[tfIndex%tfPending.size];tfIndex++
-                        val candles=FcsClient.peek(a.signal.symbol,a.signal.timeframe,180)
+                        val candles=runCatching{FcsClient.history(key,a.signal.symbol,a.signal.timeframe,180,false).first}
+                            .getOrElse{FcsClient.peek(a.signal.symbol,a.signal.timeframe,180)}
                         if(candles!=null&&candles.size>=60){
                             val before=SignalStore.loadActive(this,a.signal.symbol,a.signal.timeframe)
                             if(before!=null){
@@ -74,8 +91,8 @@ class AlarmService:Service(){
                     }
                     lastStructureCheck=now
                 }
-                updateService("Pending ${SignalStore.pendingSignals(this).size} • Open ${SignalStore.openTrades(this).size} • Armed ${AlarmStore.armed(this).size}")
-            }catch(_:Exception){updateService("Background tracking active • market sync waiting")}
+                updateService("Live feed • Pending ${SignalStore.pendingSignals(this).size} • Open ${SignalStore.openTrades(this).size} • Armed ${AlarmStore.armed(this).size}")
+            }catch(_:Exception){updateService("Live background tracking active • provider sync waiting")}
             sleep(8_000)
         }
     }
@@ -89,16 +106,16 @@ class AlarmService:Service(){
 
     private fun notifyVolatility(symbol:String,expired:Int){
         val text=if(expired>0)"Abnormal volatility detected on $symbol. $expired pending setup(s) were invalidated and moved to Records." else "Abnormal volatility detected on $symbol. New setups are blocked until structure stabilizes."
-        val n=builder("mh_alarm_alert_v12").setSmallIcon(android.R.drawable.stat_notify_error).setContentTitle("MH Volatility Alert • $symbol").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build()
+        val n=builder("mh_alarm_alert_v18").setSmallIcon(android.R.drawable.stat_notify_error).setContentTitle("MH Volatility Alert • $symbol").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build()
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs((symbol+"vol").hashCode()),n)
     }
-    private fun notifySignalExpired(s:Signal,reason:String){val text="${s.symbol} ${s.timeframe} • ${s.direction} pending setup expired. $reason";val n=builder("mh_alarm_alert_v12").setSmallIcon(android.R.drawable.ic_dialog_alert).setContentTitle("MH Setup Expired").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs((s.id+"expired").hashCode()),n)}
-    private fun notifyTrade(s:Signal,state:String){val text="$state • ${s.symbol} ${s.timeframe} • Entry ${price(s.entry)} • TP1 ${price(s.tp1)} • SL ${price(s.sl)}";val n=builder("mh_alarm_alert_v12").setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("MH Trade $state").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs((s.id+state).hashCode()),n)}
-    private fun createChannels(){if(Build.VERSION.SDK_INT>=26){val nm=getSystemService(NOTIFICATION_SERVICE) as NotificationManager;nm.createNotificationChannel(NotificationChannel("mh_alarm_service_v12","MH Background Market Tracking",NotificationManager.IMPORTANCE_LOW));nm.createNotificationChannel(NotificationChannel("mh_alarm_alert_v12","MH Market and Signal Alerts",NotificationManager.IMPORTANCE_HIGH).apply{enableVibration(true)})}}
+    private fun notifySignalExpired(s:Signal,reason:String){val text="${s.symbol} ${s.timeframe} • ${s.direction} pending setup expired. $reason";val n=builder("mh_alarm_alert_v18").setSmallIcon(android.R.drawable.ic_dialog_alert).setContentTitle("MH Setup Expired").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs((s.id+"expired").hashCode()),n)}
+    private fun notifyTrade(s:Signal,state:String){val text="$state • ${s.symbol} ${s.timeframe} • Entry ${price(s.entry)} • TP1 ${price(s.tp1)} • SL ${price(s.sl)}";val n=builder("mh_alarm_alert_v18").setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("MH Trade $state").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs((s.id+state).hashCode()),n)}
+    private fun createChannels(){if(Build.VERSION.SDK_INT>=26){val nm=getSystemService(NOTIFICATION_SERVICE) as NotificationManager;nm.createNotificationChannel(NotificationChannel("mh_alarm_service_v18","MH Continuous Live Market Tracking",NotificationManager.IMPORTANCE_LOW));nm.createNotificationChannel(NotificationChannel("mh_alarm_alert_v18","MH Market and Signal Alerts",NotificationManager.IMPORTANCE_HIGH).apply{enableVibration(true)})}}
     private fun builder(channel:String):Notification.Builder=if(Build.VERSION.SDK_INT>=26)Notification.Builder(this,channel)else Notification.Builder(this)
-    private fun serviceNotification(text:String):Notification{val stop=Intent(this,AlarmService::class.java).apply{action="STOP"};val pi=PendingIntent.getService(this,91,stop,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE);return builder("mh_alarm_service_v12").setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("MH Analysis • live background tracking").setContentText(text).setOngoing(true).addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel,"Stop",pi).build()).build()}
+    private fun serviceNotification(text:String):Notification{val stop=Intent(this,AlarmService::class.java).apply{action="STOP"};val pi=PendingIntent.getService(this,91,stop,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE);return builder("mh_alarm_service_v18").setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("MH Analysis • continuous live engine").setContentText(text).setOngoing(true).addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel,"Stop",pi).build()).build()}
     private fun updateService(text:String){(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(311,serviceNotification(text))}
-    private fun notifyState(a:AlarmEntry,text:String){val n=builder("mh_alarm_alert_v12").setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("${a.symbol} ${a.timeframe} • ${a.status}").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs(a.id.hashCode()),n)}
+    private fun notifyState(a:AlarmEntry,text:String){val n=builder("mh_alarm_alert_v18").setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("${a.symbol} ${a.timeframe} • ${a.status}").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs(a.id.hashCode()),n)}
     private fun lastTime(t:Long)=if(t in 1..9_999_999_999L)t*1000L else t
     private fun sleep(ms:Long){try{Thread.sleep(ms)}catch(_:InterruptedException){}}
     private fun price(v:Double)=if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
