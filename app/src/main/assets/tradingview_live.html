@@ -7,64 +7,106 @@
 html,body{margin:0;padding:0;width:100%;height:100%;background:#131722;overflow:hidden;font-family:Arial,sans-serif}
 #tvroot{position:absolute;inset:0;background:#131722}
 #widget{position:absolute;inset:0;z-index:1}
-#signalLayer{position:absolute;inset:0;z-index:40;pointer-events:none;display:none}
-.sigLine{position:absolute;left:8px;right:58px;height:0;border-top-width:1.3px;border-top-style:solid;opacity:.96}
-.sigLine.dashed{border-top-style:dashed}
-.sigTag{position:absolute;right:-50px;top:-9px;min-width:46px;padding:1px 3px;border-radius:3px;background:rgba(19,23,34,.90);font-size:8px;line-height:14px;font-weight:700;text-align:left;white-space:nowrap;letter-spacing:.1px}
-.sigLine.entry{border-color:#f2c94c}.sigLine.entry .sigTag{color:#f7df86}
-.sigLine.sl{border-color:#ff5a67}.sigLine.sl .sigTag{color:#ff808a}
-.sigLine.tp1{border-color:#3ddc84}.sigLine.tp1 .sigTag{color:#66e69c}
-.sigLine.tp2{border-color:#56d7d1}.sigLine.tp2 .sigTag{color:#7ee4df}
+#signalCard{position:absolute;right:10px;top:10px;z-index:70;display:none;width:166px;background:rgba(9,12,18,.88);border:1px solid rgba(255,255,255,.16);border-radius:9px;padding:8px 9px;color:#fff;font-size:9px;line-height:1.45;pointer-events:none;box-shadow:0 4px 18px rgba(0,0,0,.28)}
+#signalCard .head{font-size:11px;font-weight:800;margin-bottom:4px}
+.level{display:flex;align-items:center;gap:6px;white-space:nowrap}.sw{width:22px;height:0;border-top:2px solid #fff;display:inline-block}.sw.sl,.sw.tp1,.sw.tp2{border-top-style:dashed}.sw.entry{border-color:#f2c94c}.sw.sl{border-color:#ff5a67}.sw.tp1{border-color:#3ddc84}.sw.tp2{border-color:#56d7d1}
+#apiState{position:absolute;left:8px;bottom:7px;z-index:65;display:none;background:rgba(9,12,18,.72);border:1px solid rgba(255,255,255,.10);border-radius:6px;padding:3px 6px;color:#b9c0cb;font-size:8px;pointer-events:none}
 </style>
 </head>
 <body>
 <div id="tvroot">
-  <div id="widget" class="tradingview-widget-container"></div>
-  <div id="signalLayer"></div>
+  <div id="widget"></div>
+  <div id="signalCard"></div>
+  <div id="apiState"></div>
 </div>
+<script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
 <script>
-let currentSymbol='OANDA:XAUUSD', currentInterval='15', lastSignal=null;
+let currentSymbol='OANDA:XAUUSD', currentInterval='15';
+let tvWidget=null, chartApi=null, lastSignal=null, exactApi=false, shapeIds=[];
+let reloadToken=0;
 function mapSymbol(s){s=String(s||'').toUpperCase();return s==='BTCUSDT'?'BINANCE:BTCUSDT':'OANDA:XAUUSD'}
 function mapInterval(p){p=String(p||'15m').toLowerCase();if(p==='1m'||p==='1')return'1';if(p==='5m'||p==='5')return'5';if(p==='15m'||p==='15')return'15';if(p==='30m'||p==='30')return'30';return'60'}
-function loadTradingView(symbol,period){
-  currentSymbol=mapSymbol(symbol);currentInterval=mapInterval(period);
-  const host=document.getElementById('widget');host.innerHTML='';
-  const inner=document.createElement('div');inner.className='tradingview-widget-container__widget';inner.style.width='100%';inner.style.height='100%';host.appendChild(inner);
-  const script=document.createElement('script');script.type='text/javascript';script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';script.async=true;
-  script.innerHTML=JSON.stringify({autosize:true,symbol:currentSymbol,interval:currentInterval,timezone:'Asia/Karachi',theme:'dark',backgroundColor:'#131722',style:'1',locale:'en',hide_top_toolbar:false,hide_side_toolbar:true,allow_symbol_change:false,save_image:false,calendar:false,details:false,hotlist:false,withdateranges:false,support_host:'https://www.tradingview.com'});
-  host.appendChild(script);
-  setTimeout(()=>{if(lastSignal)drawSignal(lastSignal)},700);
-}
 function fmt(v){const n=Number(v);return Number.isFinite(n)?(Math.abs(n)>=100?n.toFixed(2):n.toFixed(5)):'-'}
-function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function setApiState(t,show){const e=document.getElementById('apiState');e.textContent=t||'';e.style.display=show?'block':'none'}
+function removeNativeShapes(){
+  if(!chartApi){shapeIds=[];return}
+  const ids=shapeIds.slice();shapeIds=[];
+  ids.forEach(id=>{try{if(typeof chartApi.removeEntity==='function')chartApi.removeEntity(id);else if(typeof chartApi.removeShape==='function')chartApi.removeShape(id)}catch(e){}})
+}
+function rememberShape(v){
+  if(v&&typeof v.then==='function'){v.then(id=>{if(id!=null)shapeIds.push(id)}).catch(()=>{exactApi=false;setApiState('',false)})}
+  else if(v!=null)shapeIds.push(v)
+}
+function drawNativeLine(price,color,dashed){
+  if(!exactApi||!chartApi||!Number.isFinite(Number(price)))return false;
+  try{
+    const r=chartApi.createShape({price:Number(price)},{shape:'horizontal_line',lock:true,disableSelection:true,disableSave:true,disableUndo:true,overrides:{linecolor:color,linestyle:dashed?2:0,linewidth:2,showPrice:true}});
+    rememberShape(r);return true;
+  }catch(e){exactApi=false;return false}
+}
+function renderSignalCard(s){
+  const el=document.getElementById('signalCard');
+  if(!s){el.style.display='none';el.innerHTML='';return}
+  const dir=String(s.direction||'SETUP').toUpperCase();
+  el.innerHTML='<div class="head">'+dir+' • '+String(s.state||'')+' • '+String(s.score||'-')+'/100</div>'+
+    '<div class="level"><span class="sw entry"></span>ENTRY '+fmt(s.entry)+'</div>'+
+    '<div class="level"><span class="sw sl"></span>SL '+fmt(s.sl)+'</div>'+
+    '<div class="level"><span class="sw tp1"></span>TP1 '+fmt(s.tp1)+'</div>'+
+    '<div class="level"><span class="sw tp2"></span>TP2 '+fmt(s.tp2)+'</div>';
+  el.style.display='block';
+}
 function drawSignal(s){
-  const layer=document.getElementById('signalLayer');layer.innerHTML='';
-  const vals=[Number(s.entry),Number(s.sl),Number(s.tp1),Number(s.tp2)].filter(Number.isFinite);
-  if(vals.length<2){layer.style.display='none';return}
-  let low=Number(s.viewLow),high=Number(s.viewHigh);
-  if(!Number.isFinite(low)||!Number.isFinite(high)||high<=low){
-    low=Math.min.apply(null,vals);high=Math.max.apply(null,vals);const pad=Math.max((high-low)*.35,Math.abs(high)*.0015,0.0005);low-=pad;high+=pad;
+  lastSignal=s;renderSignalCard(s);removeNativeShapes();
+  if(!s)return;
+  if(exactApi&&chartApi){
+    const ok=[
+      drawNativeLine(s.entry,'#f2c94c',false),
+      drawNativeLine(s.sl,'#ff5a67',true),
+      drawNativeLine(s.tp1,'#3ddc84',true),
+      drawNativeLine(s.tp2,'#56d7d1',true)
+    ].every(Boolean);
+    if(ok)setApiState('TV exact price guides',true);else setApiState('',false);
+  }else{
+    // Never place fake/estimated full-width lines. Exact numeric levels remain visible in the card.
+    setApiState('',false);
   }
-  const pad=(high-low)*.06;low-=pad;high+=pad;
-  const h=Math.max(260,document.documentElement.clientHeight||window.innerHeight||500);const top=64,bottom=46,plot=Math.max(120,h-top-bottom);
-  const y=p=>clamp(top+(high-p)/(high-low)*plot,top+5,h-bottom-5);
-  const dir=String(s.direction||'').toUpperCase();
-  const items=[
-    {k:'ENTRY',p:Number(s.entry),c:'entry',dash:false,label:'ENTRY '+(dir?dir+' ':'')+fmt(s.entry)},
-    {k:'SL',p:Number(s.sl),c:'sl',dash:true,label:'SL '+fmt(s.sl)},
-    {k:'TP1',p:Number(s.tp1),c:'tp1',dash:true,label:'TP1 '+fmt(s.tp1)},
-    {k:'TP2',p:Number(s.tp2),c:'tp2',dash:true,label:'TP2 '+fmt(s.tp2)}
-  ].filter(x=>Number.isFinite(x.p));
-  items.forEach(x=>{const d=document.createElement('div');d.className='sigLine '+x.c+(x.dash?' dashed':'');d.style.top=y(x.p)+'px';const t=document.createElement('span');t.className='sigTag';t.textContent=x.label;d.appendChild(t);layer.appendChild(d)});
-  layer.style.display='block';
+}
+function getChartApi(){
+  try{if(tvWidget&&typeof tvWidget.activeChart==='function')return tvWidget.activeChart();if(tvWidget&&typeof tvWidget.chart==='function')return tvWidget.chart()}catch(e){}
+  return null;
+}
+function onWidgetReady(token){
+  if(token!==reloadToken)return;
+  chartApi=getChartApi();
+  exactApi=!!(chartApi&&typeof chartApi.createShape==='function');
+  if(lastSignal)drawSignal(lastSignal);
+}
+function buildWidget(symbol,period,token){
+  if(token!==reloadToken)return;
+  if(!window.TradingView||typeof TradingView.widget!=='function'){
+    setTimeout(()=>buildWidget(symbol,period,token),500);return;
+  }
+  const host=document.getElementById('widget');host.innerHTML='';
+  const id='tv_chart_'+token+'_'+Date.now();
+  const node=document.createElement('div');node.id=id;node.style.width='100%';node.style.height='100%';host.appendChild(node);
+  try{
+    tvWidget=new TradingView.widget({
+      autosize:true,width:'100%',height:'100%',symbol:mapSymbol(symbol),interval:mapInterval(period),timezone:'Asia/Karachi',theme:'dark',style:'1',locale:'en',toolbar_bg:'#131722',enable_publishing:false,hide_top_toolbar:false,hide_side_toolbar:false,allow_symbol_change:false,save_image:false,details:false,hotlist:false,calendar:false,withdateranges:false,container_id:id
+    });
+    if(tvWidget&&typeof tvWidget.onChartReady==='function')tvWidget.onChartReady(()=>onWidgetReady(token));
+    else setTimeout(()=>onWidgetReady(token),2600);
+  }catch(e){setApiState('TradingView chart unavailable',true)}
+}
+function loadTradingView(symbol,period){
+  currentSymbol=mapSymbol(symbol);currentInterval=mapInterval(period);reloadToken++;shapeIds=[];chartApi=null;exactApi=false;
+  buildWidget(symbol,period,reloadToken);
 }
 function setSignalCard(raw){
   if(!raw){clearSignalCard();return}
   let s=raw;try{if(typeof raw==='string')s=JSON.parse(raw)}catch(e){clearSignalCard();return}
-  lastSignal=s;drawSignal(s)
+  drawSignal(s)
 }
-function clearSignalCard(){lastSignal=null;const layer=document.getElementById('signalLayer');layer.innerHTML='';layer.style.display='none'}
-window.addEventListener('resize',()=>{if(lastSignal)drawSignal(lastSignal)})
+function clearSignalCard(){lastSignal=null;removeNativeShapes();renderSignalCard(null);setApiState('',false)}
 </script>
 </body>
 </html>
