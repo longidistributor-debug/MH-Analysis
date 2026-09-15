@@ -16,13 +16,13 @@ object FcsClient {
     private val sourceCache=mutableMapOf<String,SourceCache>()
     private var lastNetworkAt=0L
 
-    // The connected FCS plan allows 3 requests/minute. Keep every real HTTP call
-    // safely outside the rolling 20 second window. Derived/cached timeframes do not
-    // consume another request.
+    // User plan allows 3 real requests/minute. The app now needs only two live
+    // source feeds per symbol: native 1m and deep 5m. 5m/15m/30m are all built
+    // from the same 5m source so timeframe switching does not create new calls.
     private const val MIN_GAP_MS=20_500L
-    private const val RESULT_CACHE_MS=45_000L
-    private const val FAST_SOURCE_CACHE_MS=30_000L
-    private const val SLOW_SOURCE_CACHE_MS=90_000L
+    private const val RESULT_CACHE_MS=20_000L
+    private const val ONE_MIN_TTL_MS=24_000L
+    private const val FIVE_MIN_TTL_MS=55_000L
 
     @Synchronized
     fun history(accessKey:String,symbol:String,period:String,length:Int=220,force:Boolean=false):Pair<List<Candle>,Int>{
@@ -30,68 +30,56 @@ object FcsClient {
         val normalizedPeriod=period.trim().lowercase()
         val resultKey="$normalizedSymbol|$normalizedPeriod|$length"
         val now=System.currentTimeMillis()
-
         val existing=cache[resultKey]
         if(!force&&existing!=null&&now-existing.at<RESULT_CACHE_MS)return existing.candles to 0
 
         val plan=periodPlan(normalizedPeriod,length)
-        // IMPORTANT: source cache is keyed only by symbol + real FCS source period.
-        // 1h, 2h, 4h, 6h and 12h therefore share ONE 1h network dataset.
         val sourceKey="$normalizedSymbol|${plan.sourcePeriod.lowercase()}"
-        val sourceTtl=if(plan.sourcePeriod.equals("1m",true))FAST_SOURCE_CACHE_MS else SLOW_SOURCE_CACHE_MS
+        val ttl=if(plan.sourcePeriod.equals("1m",true))ONE_MIN_TTL_MS else FIVE_MIN_TTL_MS
         val sourceHit=sourceCache[sourceKey]
-        val enoughCached=sourceHit!=null&&sourceHit.candles.size>=minRequiredSource(plan,length)
+        val enough=sourceHit!=null&&sourceHit.candles.size>=requiredSource(plan,length)
 
         val raw:Pair<List<Candle>,Int>
-        if(!force&&enoughCached&&now-sourceHit!!.at<sourceTtl){
+        if(!force&&enough&&now-sourceHit!!.at<ttl){
             raw=sourceHit.candles to 0
         }else{
-            val wait=max(0L,MIN_GAP_MS-(System.currentTimeMillis()-lastNetworkAt))
-            if(wait>0)Thread.sleep(wait)
-
-            val fetched=when(normalizedSymbol){
-                "XAUUSD"->fetch("forex",accessKey,"XAUUSD",plan.sourcePeriod,plan.sourceLength,"commodity")
-                else->try{fetch("crypto",accessKey,"BINANCE:BTCUSDT",plan.sourcePeriod,plan.sourceLength,"crypto")}
-                catch(_:Exception){fetch("crypto",accessKey,"BTCUSDT",plan.sourcePeriod,plan.sourceLength,"crypto")}
+            // If a valid cached source exists but another module just consumed the
+            // request slot, use that source immediately instead of freezing the UI.
+            // Background refresh will update it on the next allowed request.
+            val since=System.currentTimeMillis()-lastNetworkAt
+            if(!force&&enough&&since<MIN_GAP_MS){
+                raw=sourceHit!!.candles to 0
+            }else{
+                val wait=max(0L,MIN_GAP_MS-since)
+                if(wait>0)Thread.sleep(wait)
+                val fetched=when(normalizedSymbol){
+                    "XAUUSD"->fetch("forex",accessKey,"XAUUSD",plan.sourcePeriod,plan.sourceLength,"commodity")
+                    else->try{fetch("crypto",accessKey,"BINANCE:BTCUSDT",plan.sourcePeriod,plan.sourceLength,"crypto")}
+                    catch(_:Exception){fetch("crypto",accessKey,"BTCUSDT",plan.sourcePeriod,plan.sourceLength,"crypto")}
+                }
+                lastNetworkAt=System.currentTimeMillis()
+                sourceCache[sourceKey]=SourceCache(lastNetworkAt,fetched.first,fetched.second)
+                raw=fetched
             }
-            lastNetworkAt=System.currentTimeMillis()
-            sourceCache[sourceKey]=SourceCache(lastNetworkAt,fetched.first,fetched.second)
-            raw=fetched
         }
 
         val built=if(plan.multiplier==1)raw.first.takeLast(length)
         else aggregate(raw.first,plan.multiplier).takeLast(length)
-
         if(built.size<60)throw IllegalStateException("Not enough candle data for $symbol $period (${built.size})")
         cache[resultKey]=Cache(System.currentTimeMillis(),built,raw.second)
         return built to raw.second
     }
 
     private fun periodPlan(period:String,length:Int):PeriodPlan=when(period){
-        "3m"->PeriodPlan("1m",3,(length*3+18).coerceAtMost(1500))
-        "5m"->PeriodPlan("5m",1,length.coerceAtLeast(220))
-        "10m"->PeriodPlan("5m",2,(length*2+12).coerceAtMost(1500))
-        "15m"->PeriodPlan("15m",1,length.coerceAtLeast(220))
-        "30m"->PeriodPlan("30m",1,length.coerceAtLeast(220))
-
-        // All intraday higher timeframes use one deep 1h source request. This is
-        // what prevents 2h/4h/6h/12h switching from exhausting the 3 req/min plan.
-        "1h"->PeriodPlan("1h",1,1500)
-        "2h"->PeriodPlan("1h",2,1500)
-        "4h"->PeriodPlan("1h",4,1500)
-        "6h"->PeriodPlan("1h",6,1500)
-        "12h"->PeriodPlan("1h",12,1500)
-
-        // Daily stays native so the analysis engine still receives enough history.
-        "1d","1day"->PeriodPlan("1D",1,length.coerceAtLeast(220))
-        else->PeriodPlan(period,1,length.coerceAtLeast(220))
+        "1m"->PeriodPlan("1m",1,length.coerceAtLeast(240))
+        "5m"->PeriodPlan("5m",1,1500)
+        "15m"->PeriodPlan("5m",3,1500)
+        "30m"->PeriodPlan("5m",6,1500)
+        else->PeriodPlan("5m",1,1500)
     }
 
-    private fun minRequiredSource(plan:PeriodPlan,length:Int):Int{
-        val wanted=(length*plan.multiplier).coerceAtMost(plan.sourceLength)
-        // For large derived timeframes 60 aggregated candles are enough to render.
-        // Prefer the full requested set when available.
-        return max(60*plan.multiplier,wanted.coerceAtMost(plan.sourceLength)).coerceAtMost(plan.sourceLength)
+    private fun requiredSource(plan:PeriodPlan,length:Int):Int{
+        return (length*plan.multiplier).coerceAtMost(plan.sourceLength).coerceAtLeast(60*plan.multiplier)
     }
 
     private fun aggregate(src:List<Candle>,multiplier:Int):List<Candle>{
@@ -100,14 +88,7 @@ object FcsClient {
         var i=src.size%multiplier
         while(i+multiplier<=src.size){
             val g=src.subList(i,i+multiplier)
-            out+=Candle(
-                g.first().t,
-                g.first().o,
-                g.maxOf{it.h},
-                g.minOf{it.l},
-                g.last().c,
-                g.sumOf{it.v}
-            )
+            out+=Candle(g.first().t,g.first().o,g.maxOf{it.h},g.minOf{it.l},g.last().c,g.sumOf{it.v})
             i+=multiplier
         }
         return out
@@ -120,9 +101,9 @@ object FcsClient {
         c.connectTimeout=12000;c.readTimeout=18000;c.requestMethod="GET"
         val code=c.responseCode
         val body=(if(code in 200..299)c.inputStream else c.errorStream).bufferedReader().use{it.readText()}
-        if(code !in 200..299)throw IllegalStateException("FCS HTTP $code: ${body.take(150)}")
+        if(code !in 200..299)throw IllegalStateException("Market data HTTP $code")
         val root=JSONObject(body)
-        if(root.has("status")&&!root.optBoolean("status",true))throw IllegalStateException(root.optString("msg","FCS request failed"))
+        if(root.has("status")&&!root.optBoolean("status",true))throw IllegalStateException(root.optString("msg","Market data request failed"))
         val credits=root.optJSONObject("info")?.optInt("credit_count",1)?:1
         val response=root.opt("response")?:root.opt("data")?:root
         val candles=mutableListOf<Candle>()
@@ -139,8 +120,6 @@ object FcsClient {
         return candles to credits
     }
 
-    private fun normalizePeriod(p:String)=when(p.trim().lowercase()){
-        "1m"->"1m";"5m"->"5m";"15m"->"15m";"30m"->"30m";"1h"->"1h";"4h"->"4h";"1d","1day"->"1D";else->p
-    }
+    private fun normalizePeriod(p:String)=when(p.trim().lowercase()){"1m"->"1m";"5m"->"5m";else->p}
     private fun enc(s:String)=URLEncoder.encode(s,"UTF-8")
 }
