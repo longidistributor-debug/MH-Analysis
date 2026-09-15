@@ -37,10 +37,10 @@ function rememberShape(v){
   if(v&&typeof v.then==='function'){v.then(id=>{if(id!=null)shapeIds.push(id)}).catch(()=>{exactApi=false;setApiState('',false)})}
   else if(v!=null)shapeIds.push(v)
 }
-function drawNativeLine(price,color,dashed){
+function drawNativeLine(price,color,dashed,label){
   if(!exactApi||!chartApi||!Number.isFinite(Number(price)))return false;
   try{
-    const r=chartApi.createShape({price:Number(price)},{shape:'horizontal_line',lock:true,disableSelection:true,disableSave:true,disableUndo:true,overrides:{linecolor:color,linestyle:dashed?2:0,linewidth:2,showPrice:true}});
+    const r=chartApi.createShape({price:Number(price)},{shape:'horizontal_line',text:String(label||''),lock:true,disableSelection:true,disableSave:true,disableUndo:true,overrides:{linecolor:color,linestyle:dashed?2:0,linewidth:2,showPrice:true,textcolor:color,fontsize:11,bold:true}});
     rememberShape(r);return true;
   }catch(e){exactApi=false;return false}
 }
@@ -59,15 +59,15 @@ function drawSignal(s){
   lastSignal=s;renderSignalCard(s);removeNativeShapes();
   if(!s)return;
   if(exactApi&&chartApi){
+    const dir=String(s.direction||'').toUpperCase();
     const ok=[
-      drawNativeLine(s.entry,'#f2c94c',false),
-      drawNativeLine(s.sl,'#ff5a67',true),
-      drawNativeLine(s.tp1,'#3ddc84',true),
-      drawNativeLine(s.tp2,'#56d7d1',true)
+      drawNativeLine(s.entry,'#f2c94c',false,'ENTRY '+dir+' '+fmt(s.entry)),
+      drawNativeLine(s.sl,'#ff5a67',true,'SL '+fmt(s.sl)),
+      drawNativeLine(s.tp1,'#3ddc84',true,'TP1 '+fmt(s.tp1)),
+      drawNativeLine(s.tp2,'#56d7d1',true,'TP2 '+fmt(s.tp2))
     ].every(Boolean);
     if(ok)setApiState('TV exact price guides',true);else setApiState('',false);
   }else{
-    // Never place fake/estimated full-width lines. Exact numeric levels remain visible in the card.
     setApiState('',false);
   }
 }
