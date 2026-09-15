@@ -20,8 +20,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+      - name: Bundle official FCS chart library
+        run: |
+          rm -rf /tmp/fcs-chart app/src/main/assets/fcs-chart
+          git clone --depth 1 https://github.com/fcsapi/chart-js.git /tmp/fcs-chart
+          mkdir -p app/src/main/assets/fcs-chart
+          cp -R /tmp/fcs-chart/src/. app/src/main/assets/fcs-chart/
+          test -f app/src/main/assets/fcs-chart/fcsapi-chart.js
+          test -f app/src/main/assets/fcs-chart/fcsapi-chart.css
       - run: python3 scripts/patch_v24.py
-      - run: python3 scripts/patch_v25.py || true
+      - run: python3 scripts/patch_v25.py
       - run: python3 scripts/patch_v25_socket.py
       - run: gradle --no-daemon assembleDebug
       - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v25.apk
