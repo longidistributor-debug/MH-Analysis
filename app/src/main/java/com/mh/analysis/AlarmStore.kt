@@ -20,6 +20,23 @@ object AlarmStore {
         }
     }
 
+    /**
+     * Every accepted pending setup must have a live entry alarm.  This also
+     * repairs older pending setups after an app update so a trigger cannot be
+     * missed just because the user did not reopen the Alarm dialog.
+     */
+    fun ensureArmed(c:Context,s:Signal):AlarmEntry{
+        val l=list(c).toMutableList();val now=System.currentTimeMillis()
+        val i=l.indexOfFirst{it.signalId==s.id}
+        val next=if(i>=0){
+            val old=l[i]
+            if(old.status in setOf("TRIGGERED","EXPIRED")) old
+            else old.copy(enabled=true,status="ARMED",armedAt=old.armedAt?:now,triggeredAt=null)
+        }else AlarmEntry("alarm_${s.id}",s.id,s.symbol,s.timeframe,s.direction,s.entry,Long.MAX_VALUE,now,true,"ARMED",null,now)
+        if(i>=0)l[i]=next else l.add(0,next)
+        save(c,l);return next
+    }
+
     fun list(c:Context):List<AlarmEntry>{
         val cutoff=System.currentTimeMillis()-KEEP_MS
         val raw=prefs(c).getString("alarms","[]")?:"[]"
@@ -30,6 +47,7 @@ object AlarmStore {
     }
 
     fun armed(c:Context)=list(c).filter{it.enabled&&it.status=="ARMED"}
+    fun forSignal(c:Context,signalId:String)=list(c).firstOrNull{it.signalId==signalId}
 
     fun setEnabled(c:Context,id:String,on:Boolean):AlarmEntry?{
         val l=list(c).toMutableList();val i=l.indexOfFirst{it.id==id};if(i<0)return null
