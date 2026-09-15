@@ -11,8 +11,8 @@ android {
         applicationId = "com.mh.analysis"
         minSdk = 26
         targetSdk = 33
-        versionCode = 23
-        versionName = "23.0"
+        versionCode = 24
+        versionName = "24.0"
     }
 
     buildTypes {
