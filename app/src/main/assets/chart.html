@@ -7,7 +7,7 @@
 html,body{margin:0;width:100%;height:100%;background:#050505;color:#fff;overflow:hidden;font-family:Arial,sans-serif}
 #fcs_chartparent{position:absolute;inset:0;width:100%;height:100%;background:#050505}
 #fcs_chart{width:100%;height:100%}
-#state{position:absolute;left:10px;top:8px;z-index:9999;background:rgba(0,0,0,.76);border:1px solid #333;border-radius:8px;padding:6px 9px;font-size:10px;color:#ddd;pointer-events:none}
+#state{position:absolute;left:10px;top:8px;z-index:9999;background:rgba(0,0,0,.76);border:1px solid #333;border-radius:8px;padding:6px 9px;font-size:10px;color:#ddd;pointer-events:none;max-width:245px}
 #state b{font-size:12px;color:#fff}
 #err{position:absolute;inset:0;z-index:9998;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;color:#aaa;background:#050505;font-size:13px}
 </style>
@@ -18,35 +18,64 @@ html,body{margin:0;width:100%;height:100%;background:#050505;color:#fff;overflow
 <div id="state"><b id="ticker">MS ANALYSIS</b><div id="live">Initializing live chart…</div></div>
 <div id="err"></div>
 <script>
-let chart=null,currentSymbol='XAUUSD',currentPeriod='15m',lastSignal=null;
+let chart=null,currentSymbol='XAUUSD',currentPeriod='15m',lastSignal=null,bridgeTimer=null,lastFingerprint='';
 const state=document.getElementById('live'),ticker=document.getElementById('ticker'),err=document.getElementById('err');
 function socketSymbol(s){return (String(s).toUpperCase()==='BTCUSDT')?'BINANCE:BTCUSDT':'FX:XAUUSD'}
 function chartPeriod(p){p=String(p).toLowerCase();if(p==='1h'||p==='60')return'1H';if(p==='30'||p==='30m')return'30m';if(p==='15'||p==='15m')return'15m';if(p==='5'||p==='5m')return'5m';return'1m'}
+function socketPeriod(p){p=String(p).toLowerCase();if(p==='1h'||p==='60')return'60';if(p==='30'||p==='30m')return'30';if(p==='15'||p==='15m')return'15';if(p==='5'||p==='5m')return'5';return'1'}
 function tell(s){state.textContent=s;try{AndroidLive.onSocketState(s)}catch(e){}}
 function showError(s){err.textContent=s;err.style.display='flex'}
 function hideError(){err.style.display='none'}
+function extractCandle(x){
+ if(!x)return null;
+ if(Array.isArray(x)&&x.length>=5)return{t:+x[0]||Math.floor(Date.now()/1000),o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5]||0};
+ const t=+(x.t??x.time??x.timestamp??x.date??0)||Math.floor(Date.now()/1000);
+ const o=+(x.o??x.open),h=+(x.h??x.high),l=+(x.l??x.low),c=+(x.c??x.close),v=+(x.v??x.volume??0)||0;
+ if(!isFinite(c))return null;
+ return{t,o:isFinite(o)?o:c,h:isFinite(h)?h:c,l:isFinite(l)?l:c,c,v};
+}
+function bridgeLive(){
+ if(!chart||!chart.engine)return;
+ try{
+   const d=chart.engine.data||[];
+   const x=extractCandle(d[d.length-1]);
+   const sm=chart.engine.socketManager;
+   const st=sm&&sm.getConnectionStatus?sm.getConnectionStatus():'';
+   if(st){const label=(typeof st==='string'?st:JSON.stringify(st));tell('LIVE • '+currentPeriod+' • '+label);}
+   if(!x)return;
+   const fp=[currentSymbol,currentPeriod,x.t,x.c,x.h,x.l].join('|');
+   if(fp===lastFingerprint)return;lastFingerprint=fp;
+   const payload={type:'price',symbol:socketSymbol(currentSymbol),timeframe:socketPeriod(currentPeriod),prices:{mode:'candle',t:x.t,o:x.o,h:x.h,l:x.l,c:x.c,v:x.v}};
+   try{AndroidLive.onSocketMessage(JSON.stringify(payload))}catch(e){}
+ }catch(e){}
+}
+function startBridge(){if(bridgeTimer)clearInterval(bridgeTimer);bridgeTimer=setInterval(bridgeLive,1000);setTimeout(bridgeLive,1200)}
+function stopBridge(){if(bridgeTimer){clearInterval(bridgeTimer);bridgeTimer=null}}
 async function initLiveChart(accessKey,socketKey,symbol,period,publicKey){
-  currentSymbol=symbol||currentSymbol;currentPeriod=period||currentPeriod;ticker.textContent=currentSymbol+' • '+currentPeriod;
-  hideError();tell('FCS live chart connecting…');
-  try{
-    if(typeof FCSAPIChart==='undefined')throw new Error('FCS chart library did not load');
-    const holder=document.getElementById('fcs_chart');holder.innerHTML='';
-    chart=new FCSAPIChart({
-      container:holder,parentid:'fcs_chartparent',accessKey:accessKey||'',socketApiKey:socketKey||'',publicKey:publicKey||'',
-      symbol:socketSymbol(currentSymbol),period:chartPeriod(currentPeriod),length:220,theme:'dark',displayMode:'chartonly',
-      defaultChartType:'candlestick',enableCache:true,changeURL:false,enableSocket:true,enableGrid:true,enableCrosshair:true,
-      enableCrosshairLabels:true,enablePriceLine:true,enableAskBidLines:false,enableOHLCBar:true,enableHighLowLabels:true,
-      enableDrawingTools:false,enableContextMenu:false,autoScale:true
-    });
-    tell('LIVE CHART ACTIVE • '+currentPeriod);
-    setTimeout(()=>{applySignal(lastSignal);try{chart.resize()}catch(e){}},1200);
-  }catch(e){tell('LIVE CHART ERROR');showError('Live chart could not start: '+(e&&e.message?e.message:e));}
+ currentSymbol=symbol||currentSymbol;currentPeriod=period||currentPeriod;ticker.textContent=currentSymbol+' • '+currentPeriod;
+ hideError();tell('FCS live chart connecting…');stopBridge();lastFingerprint='';
+ try{
+   if(typeof FCSAPIChart==='undefined')throw new Error('FCS chart library did not load');
+   if(chart){try{chart.destroy()}catch(e){}chart=null;}
+   const holder=document.getElementById('fcs_chart');holder.innerHTML='';
+   chart=new FCSAPIChart({
+     container:holder,parentid:'fcs_chartparent',accessKey:accessKey||'',socketApiKey:socketKey||'',publicKey:publicKey||'',
+     symbol:socketSymbol(currentSymbol),period:chartPeriod(currentPeriod),length:220,theme:'dark',displayMode:'chartonly',
+     defaultChartType:'candlestick',enableCache:true,changeURL:false,enableSocket:true,enableGrid:true,enableCrosshair:true,
+     enableCrosshairLabels:true,enablePriceLine:true,enableAskBidLines:false,enableHighLowLabels:true,
+     enableDrawingTools:false,enableContextMenu:false,autoScale:true
+   });
+   tell('FCS LIVE CHART STARTED • '+currentPeriod);
+   startBridge();
+   setTimeout(()=>{applySignal(lastSignal);try{chart.resize()}catch(e){};bridgeLive()},1500);
+ }catch(e){tell('LIVE CHART ERROR');showError('Live chart could not start: '+(e&&e.message?e.message:e));}
 }
 async function switchLiveChart(symbol,period){
- currentSymbol=symbol||currentSymbol;currentPeriod=period||currentPeriod;ticker.textContent=currentSymbol+' • '+currentPeriod;hideError();
+ currentSymbol=symbol||currentSymbol;currentPeriod=period||currentPeriod;ticker.textContent=currentSymbol+' • '+currentPeriod;hideError();lastFingerprint='';
  if(!chart){tell('Live chart not initialized');return}
- try{tell('Switching '+currentPeriod+'…');chart.setSymbol(socketSymbol(currentSymbol));chart.setPeriod(chartPeriod(currentPeriod));setTimeout(()=>{tell('LIVE CHART ACTIVE • '+currentPeriod);applySignal(lastSignal)},700)}catch(e){showError('Timeframe switch failed: '+(e&&e.message?e.message:e))}
+ try{tell('Switching '+currentPeriod+'…');await chart.setSymbol(socketSymbol(currentSymbol));await chart.setPeriod(chartPeriod(currentPeriod));setTimeout(()=>{tell('LIVE CHART ACTIVE • '+currentPeriod);applySignal(lastSignal);bridgeLive()},600)}catch(e){showError('Timeframe switch failed: '+(e&&e.message?e.message:e))}
 }
+function pauseLiveChart(){stopBridge();if(chart){try{chart.destroy()}catch(e){}chart=null;}tell('BACKGROUND LIVE HANDOFF')}
 async function applySignal(s){
  lastSignal=s;if(typeof s==='string'){try{lastSignal=JSON.parse(s)}catch(e){lastSignal=null}}
  if(!chart)return;
@@ -56,9 +85,10 @@ async function applySignal(s){
  for(const [key,label,color,style] of items){const v=Number(lastSignal[key]);if(!isFinite(v))continue;try{await chart.addHorizontalLine({id:'mh-'+key,price:v,color,label,style,lineWidth:key==='entry'?2:1,textPosition:'above-left',textColor:'#ffffff',textSize:11})}catch(e){}}
 }
 function setSignal(s){applySignal(s)}
-function renderCandles(){/* visible chart is owned by FCS; analysis candles stay native */}
+function renderCandles(){/* official FCS chart owns visible candles */}
 function clearChart(){if(chart&&chart.clearHorizontalLines)try{chart.clearHorizontalLines()}catch(e){};lastSignal=null}
 function showMessage(t){tell(t)}
+window.onerror=function(msg,url,line){tell('CHART ERROR • '+msg);return false};
 window.addEventListener('resize',()=>{try{chart&&chart.resize()}catch(e){}});
 </script>
 </body>
