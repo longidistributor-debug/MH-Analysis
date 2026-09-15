@@ -37,7 +37,7 @@ class AlarmService:Service(){
             updateService("Tracking ${pending.size} pending • ${open.size} open • ${task.symbol} ${task.timeframe}")
             thread(name="mh-rest-monitor"){
                 runCatching{if(task.kind=="LIFE")pollLifecycle(key,task.symbol) else pollStructure(key,task.symbol,task.timeframe)}
-                h.postDelayed(this,21_500L)
+                h.postDelayed(tick,21_500L)
             }
         }
     }
