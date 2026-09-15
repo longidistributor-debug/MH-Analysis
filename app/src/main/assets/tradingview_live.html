@@ -6,14 +6,36 @@
 <style>
 html,body{margin:0;padding:0;width:100%;height:100%;background:#131722;overflow:hidden;font-family:Arial,sans-serif}
 #tvroot{position:absolute;inset:0;background:#131722}
-#widget{position:absolute;inset:0}
-#signalCard{position:absolute;right:10px;top:10px;z-index:1000;display:none;max-width:205px;background:rgba(7,10,15,.88);border:1px solid rgba(255,255,255,.20);border-radius:10px;padding:8px 10px;color:#fff;font-size:10px;line-height:1.45;pointer-events:none;box-shadow:0 4px 18px rgba(0,0,0,.35)}
+#widget{position:absolute;inset:0;z-index:1}
+#signalOverlay{position:absolute;inset:0;z-index:50;pointer-events:none;display:none}
+#signalCard{position:absolute;right:10px;top:10px;max-width:220px;background:rgba(7,10,15,.92);border:1px solid rgba(255,255,255,.22);border-radius:10px;padding:8px 10px;color:#fff;font-size:10px;line-height:1.45;box-shadow:0 4px 18px rgba(0,0,0,.35)}
 #signalCard b{font-size:12px}
-#state{position:absolute;left:10px;bottom:8px;z-index:1000;background:rgba(7,10,15,.72);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:#c6cbd4;font-size:9px;pointer-events:none}
+#levelArea{position:absolute;left:0;right:0;top:72px;bottom:48px}
+.level{position:absolute;left:7px;right:7px;height:0;border-top:1px dashed rgba(255,255,255,.75)}
+.level .tag{position:absolute;right:5px;top:-11px;padding:3px 7px;border-radius:7px;color:#fff;font-size:9px;font-weight:700;letter-spacing:.15px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.35)}
+.level.entry{border-top:2px solid #f4c542}.level.entry .tag{background:rgba(165,125,0,.95)}
+.level.sl{border-top-color:#ff4d5a}.level.sl .tag{background:rgba(168,32,44,.95)}
+.level.tp1{border-top-color:#33d17a}.level.tp1 .tag{background:rgba(20,128,72,.95)}
+.level.tp2{border-top-color:#4ddbd1}.level.tp2 .tag{background:rgba(18,118,116,.95)}
+#overlayBadge{position:absolute;left:9px;top:9px;background:rgba(7,10,15,.86);border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:5px 8px;color:#d9dde5;font-size:8.5px;font-weight:700;letter-spacing:.2px}
+#state{position:absolute;left:10px;bottom:8px;z-index:60;background:rgba(7,10,15,.72);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:#c6cbd4;font-size:9px;pointer-events:none}
 </style>
 </head>
 <body>
-<div id="tvroot"><div id="widget" class="tradingview-widget-container"></div><div id="signalCard"></div><div id="state">TradingView live chart</div></div>
+<div id="tvroot">
+  <div id="widget" class="tradingview-widget-container"></div>
+  <div id="signalOverlay">
+    <div id="overlayBadge">MH SIGNAL LEVELS • APP OVERLAY</div>
+    <div id="signalCard"></div>
+    <div id="levelArea">
+      <div id="lvlEntry" class="level entry"><span class="tag"></span></div>
+      <div id="lvlSl" class="level sl"><span class="tag"></span></div>
+      <div id="lvlTp1" class="level tp1"><span class="tag"></span></div>
+      <div id="lvlTp2" class="level tp2"><span class="tag"></span></div>
+    </div>
+  </div>
+  <div id="state">TradingView live chart</div>
+</div>
 <script>
 let currentSymbol='OANDA:XAUUSD', currentInterval='15';
 function mapSymbol(s){s=String(s||'').toUpperCase();return s==='BTCUSDT'?'BINANCE:BTCUSDT':'OANDA:XAUUSD'}
@@ -26,15 +48,32 @@ function loadTradingView(symbol,period){
   script.innerHTML=JSON.stringify({autosize:true,symbol:currentSymbol,interval:currentInterval,timezone:'Asia/Karachi',theme:'dark',backgroundColor:'#131722',style:'1',locale:'en',hide_top_toolbar:false,hide_side_toolbar:false,allow_symbol_change:false,save_image:false,calendar:false,details:false,hotlist:false,withdateranges:true,support_host:'https://www.tradingview.com'});
   script.onerror=()=>{document.getElementById('state').textContent='TradingView chart network error'};
   host.appendChild(script);
-  document.getElementById('state').textContent=(symbol||'XAUUSD')+' • '+(period||'15m')+' • LIVE';
+  document.getElementById('state').textContent=(symbol||'XAUUSD')+' • '+(period||'15m')+' • TRADINGVIEW LIVE';
+}
+function fmt(v){const n=Number(v);return Number.isFinite(n)?(Math.abs(n)>=100?n.toFixed(2):n.toFixed(5)):'-'}
+function place(id,value,min,max){
+  const el=document.getElementById(id);const n=Number(value);if(!Number.isFinite(n)){el.style.display='none';return}
+  el.style.display='block';
+  const span=Math.max(max-min,Math.max(Math.abs(max),1)*0.000001);
+  const ratio=(n-min)/span;
+  const top=82-(ratio*64);
+  el.style.top=Math.max(10,Math.min(90,top))+'%';
 }
 function setSignalCard(raw){
-  const el=document.getElementById('signalCard');
-  if(!raw){el.style.display='none';el.textContent='';return}
-  let s=raw;try{if(typeof raw==='string')s=JSON.parse(raw)}catch(e){el.style.display='none';return}
-  const fmt=v=>{const n=Number(v);return Number.isFinite(n)?(Math.abs(n)>=100?n.toFixed(2):n.toFixed(5)):'-'};
-  el.innerHTML='<b>'+String(s.direction||'SETUP')+' • '+String(s.state||'')+'</b><br>Entry '+fmt(s.entry)+'<br>SL '+fmt(s.sl)+'<br>TP1 '+fmt(s.tp1)+'<br>TP2 '+fmt(s.tp2)+'<br>Score '+String(s.score||'-')+'/100';
-  el.style.display='block';
+  const wrap=document.getElementById('signalOverlay');const card=document.getElementById('signalCard');
+  if(!raw){wrap.style.display='none';card.textContent='';return}
+  let s=raw;try{if(typeof raw==='string')s=JSON.parse(raw)}catch(e){wrap.style.display='none';return}
+  const values=[Number(s.entry),Number(s.sl),Number(s.tp1),Number(s.tp2)].filter(Number.isFinite);
+  if(!values.length){wrap.style.display='none';return}
+  const min=Math.min.apply(null,values),max=Math.max.apply(null,values);
+  place('lvlEntry',s.entry,min,max);place('lvlSl',s.sl,min,max);place('lvlTp1',s.tp1,min,max);place('lvlTp2',s.tp2,min,max);
+  document.querySelector('#lvlEntry .tag').textContent='ENTRY  '+fmt(s.entry);
+  document.querySelector('#lvlSl .tag').textContent='SL  '+fmt(s.sl);
+  document.querySelector('#lvlTp1 .tag').textContent='TP1  '+fmt(s.tp1);
+  document.querySelector('#lvlTp2 .tag').textContent='TP2  '+fmt(s.tp2);
+  const dir=String(s.direction||'SETUP').toUpperCase();const state=String(s.state||'');
+  card.innerHTML='<b>'+dir+' • '+state+'</b><br>Score '+String(s.score||'-')+'/100<br>Entry '+fmt(s.entry)+'<br>SL '+fmt(s.sl)+'<br>TP1 '+fmt(s.tp1)+'<br>TP2 '+fmt(s.tp2);
+  wrap.style.display='block';
 }
 function clearSignalCard(){setSignalCard(null)}
 </script>
