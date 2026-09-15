@@ -9,6 +9,22 @@ import kotlin.math.sqrt
 
 object AnalysisEngine {
     data class SetupCheck(val valid:Boolean,val reason:String)
+    private data class IR(
+        val direction:String,
+        val impulseDistance:Double,
+        val impulseCandles:Int,
+        val avgImpulseBody:Double,
+        val retracementDistance:Double,
+        val retracementCandles:Int,
+        val retracementRatio:Double,
+        val speedRatio:Double,
+        val counterBodyRatio:Double,
+        val continuationStrength:Int,
+        val reversalRisk:Boolean,
+        val impulseHigh:Double,
+        val impulseLow:Double,
+        val resumed:Boolean
+    )
 
     fun analyze(symbol:String,timeframe:String,c:List<Candle>):Signal?{
         if(c.size<100)return null
@@ -46,6 +62,7 @@ object AnalysisEngine {
         val nearSupport=abs(last.c-localLow)<=a*1.10||abs(last.c-swingLow)<=a*1.25;val nearResistance=abs(last.c-localHigh)<=a*1.10||abs(last.c-swingHigh)<=a*1.25
         val rsiBullDiv=bullishRsiDivergence(c);val rsiBearDiv=bearishRsiDivergence(c)
         val pullbackBull=c.takeLast(10).dropLast(1).any{it.l<=e20+a*.35&&it.c>=e50-a*.15};val pullbackBear=c.takeLast(10).dropLast(1).any{it.h>=e20-a*.35&&it.c<=e50+a*.15}
+        val irBull=impulseRetracement(c,"BUY",a);val irBear=impulseRetracement(c,"SELL",a)
 
         var fvgType:String?=null;var fvgLow:Double?=null;var fvgHigh:Double?=null
         val fw=c.takeLast(30);for(i in 2 until fw.size){if(fw[i].l>fw[i-2].h){fvgType="BULLISH";fvgLow=fw[i-2].h;fvgHigh=fw[i].l};if(fw[i].h<fw[i-2].l){fvgType="BEARISH";fvgLow=fw[i].h;fvgHigh=fw[i-2].l}}
@@ -73,27 +90,56 @@ object AnalysisEngine {
         if(pullbackBull)b(8,"Recent EMA pullback held");if(pullbackBear)s(8,"Recent EMA rejection held")
         if(nearSupport)b(5,"Near structural support");if(nearResistance)s(5,"Near structural resistance")
 
+        irBull?.let{m->
+            when{
+                m.reversalRisk->s(14,"Bull impulse damaged: ${pct(m.retracementRatio)} retracement with aggressive counter-pressure")
+                m.continuationStrength>=22->b(16,"Strong bullish impulse / weak retracement: ${pct(m.retracementRatio)}, speed ${two(m.speedRatio)}x")
+                m.continuationStrength>=12->b(10,"Healthy bullish impulse retracement: ${pct(m.retracementRatio)}")
+                m.retracementRatio>.50->s(6,"Bullish impulse losing strength: ${pct(m.retracementRatio)} retracement")
+            }
+        }
+        irBear?.let{m->
+            when{
+                m.reversalRisk->b(14,"Bear impulse damaged: ${pct(m.retracementRatio)} retracement with aggressive counter-pressure")
+                m.continuationStrength>=22->s(16,"Strong bearish impulse / weak retracement: ${pct(m.retracementRatio)}, speed ${two(m.speedRatio)}x")
+                m.continuationStrength>=12->s(10,"Healthy bearish impulse retracement: ${pct(m.retracementRatio)}")
+                m.retracementRatio>.50->b(6,"Bearish impulse losing strength: ${pct(m.retracementRatio)} retracement")
+            }
+        }
+
+        val bullIrContinuation=irBull?.let{!it.reversalRisk&&it.continuationStrength>=12}==true
+        val bearIrContinuation=irBear?.let{!it.reversalRisk&&it.continuationStrength>=12}==true
         val bullLiquidityReversal=(stopHuntBull||fakeBreakBull)&&(chochBull||rsiBullDiv||pressureBull||momentumBull)
         val bearLiquidityReversal=(stopHuntBear||fakeBreakBear)&&(chochBear||rsiBearDiv||pressureBear||momentumBear)
         val bullBreakoutRetest=retestBull&&(trendBull||momentumBull||fvgBull);val bearBreakoutRetest=retestBear&&(trendBear||momentumBear||fvgBear)
-        val bullContinuation=trendBull&&trendSlopeBull&&(momentumBull||pressureBull||pullbackBull||shortBosBull)&&(pullbackBull||fvgBull||bullObMid!=null||shortBosBull||nearSupport)
-        val bearContinuation=trendBear&&trendSlopeBear&&(momentumBear||pressureBear||pullbackBear||shortBosBear)&&(pullbackBear||fvgBear||bearObMid!=null||shortBosBear||nearResistance)
+        val bullContinuation=trendBull&&trendSlopeBull&&(momentumBull||pressureBull||pullbackBull||shortBosBull||bullIrContinuation)&&(pullbackBull||fvgBull||bullObMid!=null||shortBosBull||nearSupport||bullIrContinuation)
+        val bearContinuation=trendBear&&trendSlopeBear&&(momentumBear||pressureBear||pullbackBear||shortBosBear||bearIrContinuation)&&(pullbackBear||fvgBear||bearObMid!=null||shortBosBear||nearResistance||bearIrContinuation)
         val bullChoch=chochBull&&(stopHuntBull||rsiBullDiv||displacementBull||pressureBull);val bearChoch=chochBear&&(stopHuntBear||rsiBearDiv||displacementBear||pressureBear)
         val bullBreakoutMomentum=(bosBull||shortBosBull)&&trendSlopeBull&&(momentumBull||displacementBull);val bearBreakoutMomentum=(bosBear||shortBosBear)&&trendSlopeBear&&(momentumBear||displacementBear)
 
         val bullFamily=listOf(bullLiquidityReversal,bullBreakoutRetest,bullContinuation,bullChoch,bullBreakoutMomentum).count{it};val bearFamily=listOf(bearLiquidityReversal,bearBreakoutRetest,bearContinuation,bearChoch,bearBreakoutMomentum).count{it}
         val dir=if(bull>=bear)"BUY" else "SELL";val win=max(bull,bear);val lose=min(bull,bear);val sep=win-lose;val family=if(dir=="BUY")bullFamily else bearFamily
+        val selectedIr=if(dir=="BUY")irBull else irBear
+        val continuationSelected=(dir=="BUY"&&bullContinuation)||(dir=="SELL"&&bearContinuation)
+        if(continuationSelected&&selectedIr?.reversalRisk==true)return null
         if(family<1||win<44||sep<6)return null
 
         val matchingFvg=(dir=="BUY"&&fvgBull)||(dir=="SELL"&&fvgBear);val fvgMid=if(matchingFvg&&fvgLow!=null&&fvgHigh!=null)(fvgLow!!+fvgHigh!!)/2 else null;val obMid=if(dir=="BUY")bullObMid else bearObMid
-        val impulse=c.takeLast(24);val impulseHigh=impulse.maxOf{it.h};val impulseLow=impulse.minOf{it.l};val impulseRange=(impulseHigh-impulseLow).coerceAtLeast(a)
-        val retrace382=if(dir=="BUY")impulseHigh-impulseRange*.382 else impulseLow+impulseRange*.382;val retrace50=if(dir=="BUY")impulseHigh-impulseRange*.50 else impulseLow+impulseRange*.50
+        val fallbackImpulse=c.takeLast(24);val fallbackHigh=fallbackImpulse.maxOf{it.h};val fallbackLow=fallbackImpulse.minOf{it.l};val fallbackRange=(fallbackHigh-fallbackLow).coerceAtLeast(a)
+        val impulseHigh=selectedIr?.impulseHigh?:fallbackHigh;val impulseLow=selectedIr?.impulseLow?:fallbackLow;val impulseRange=selectedIr?.impulseDistance?.coerceAtLeast(a)?:fallbackRange
+        val retrace25=if(dir=="BUY")impulseHigh-impulseRange*.25 else impulseLow+impulseRange*.25
+        val retrace35=if(dir=="BUY")impulseHigh-impulseRange*.35 else impulseLow+impulseRange*.35
+        val retrace50=if(dir=="BUY")impulseHigh-impulseRange*.50 else impulseLow+impulseRange*.50
         val candidates=mutableListOf<Pair<String,Double>>()
         if(fvgMid!=null)candidates+="FVG midpoint" to fvgMid;if(obMid!=null)candidates+="order-block midpoint" to obMid
         if(dir=="BUY"&&e20<last.c)candidates+="EMA20 pullback" to e20;if(dir=="SELL"&&e20>last.c)candidates+="EMA20 pullback" to e20
         if(dir=="BUY"&&e50<last.c)candidates+="EMA50 structure pullback" to e50;if(dir=="SELL"&&e50>last.c)candidates+="EMA50 structure pullback" to e50
         if(dir=="BUY"&&retestBull)candidates+="breakout retest" to max(shortHigh,priorHigh);if(dir=="SELL"&&retestBear)candidates+="breakout retest" to min(shortLow,priorLow)
-        if((dir=="BUY"&&trendBull)||(dir=="SELL"&&trendBear)){candidates+="38.2% impulse retracement" to retrace382;candidates+="50% impulse retracement" to retrace50}
+        if(selectedIr!=null&&!selectedIr.reversalRisk){
+            candidates+="25% impulse retracement" to retrace25
+            candidates+="35% impulse retracement" to retrace35
+            if(selectedIr.retracementRatio<.50)candidates+="50% impulse retracement" to retrace50
+        }
         val validEntries=candidates.filter{(_,v)->val dist=abs(last.c-v)/a;val untouched=if(dir=="BUY")v<=last.l-a*.02 else v>=last.h+a*.02;val directional=if(dir=="BUY")v<last.c else v>last.c;directional&&untouched&&dist in .08..2.35}.sortedBy{abs(last.c-it.second)}
         if(validEntries.isEmpty())return null
         val entrySource=validEntries.first().first;val entry=validEntries.first().second
@@ -105,22 +151,85 @@ object AnalysisEngine {
         val nearest=if(dir=="BUY")listOf(localHigh,priorHigh,swingHigh).filter{it>entry+a*.20}.minOrNull() else listOf(localLow,priorLow,swingLow).filter{it<entry-a*.20}.maxOrNull();val tp1=if(nearest!=null){if(dir=="BUY")min(rawTp1,nearest)else max(rawTp1,nearest)}else rawTp1;val tp2=rawTp2
 
         val familyName=when{dir=="BUY"&&bullLiquidityReversal->"liquidity / SL-hunt reversal";dir=="SELL"&&bearLiquidityReversal->"liquidity / SL-hunt reversal";dir=="BUY"&&bullBreakoutRetest->"breakout + retest continuation";dir=="SELL"&&bearBreakoutRetest->"breakout + retest continuation";dir=="BUY"&&bullChoch->"CHoCH reversal";dir=="SELL"&&bearChoch->"CHoCH reversal";dir=="BUY"&&bullBreakoutMomentum->"breakout momentum continuation";dir=="SELL"&&bearBreakoutMomentum->"breakout momentum continuation";else->"established trend pullback"}
-        val score=(60+sep+(family*5)).coerceIn(60,96);val reasons=(if(dir=="BUY")br else sr).sortedByDescending{it.first}.take(10).map{"${it.second} (+${it.first})"};val strongest=reasons.take(4).joinToString("; ")
-        val validityReason="No fixed candle-count expiry. Pending remains valid only while live trend, momentum, liquidity and structure support the original thesis; abnormal volatility or structural failure expires it immediately."
-        val setupReason="$dir $familyName. Best confirmed family on the current graph. Evidence: $strongest. Evidence balance $win vs $lose. Pending entry uses $entrySource at ${fmt(entry)} and is outside the signal candle."
+        val irBonus=(selectedIr?.continuationStrength?:0).coerceIn(-8,18);val score=(60+sep+(family*5)+irBonus/2).coerceIn(60,97)
+        val reasons=(if(dir=="BUY")br else sr).sortedByDescending{it.first}.take(10).map{"${it.second} (+${it.first})"};val strongest=reasons.take(4).joinToString("; ")
+        val irText=selectedIr?.let{" Impulse/retracement: ${pct(it.retracementRatio)} depth, ${two(it.speedRatio)}x speed, ${two(it.counterBodyRatio)}x counter-body strength, ${it.impulseCandles} impulse candles / ${it.retracementCandles} retracement candles."}.orEmpty()
+        val validityReason="No fixed candle-count expiry. Pending remains valid only while live trend, momentum, liquidity, impulse/retracement quality and structure support the original thesis; abnormal volatility, deep aggressive retracement or structural failure expires it immediately."
+        val setupReason="$dir $familyName. Best confirmed family on the current graph. Evidence: $strongest.$irText Evidence balance $win vs $lose. Pending entry uses $entrySource at ${fmt(entry)} and is outside the signal candle."
         val slReason="SL is behind local invalidation structure and capped by ${two(maxRiskAtr)} ATR for $timeframe.";val tp1Reason="TP1 uses nearby structure and a ${two(tp1Atr)} ATR objective.";val tp2Reason="TP2 uses an extended ${two(tp2Atr)} ATR objective."
         return Signal(UUID.randomUUID().toString(),symbol,timeframe,dir,entry,sl,tp1,tp2,score,bull,bear,0,System.currentTimeMillis(),last.t,"PENDING",reasons,e20,e50,r,macd,a,fvgType,fvgLow,fvgHigh,validityReason,slReason,tp1Reason,tp2Reason,setupReason)
     }
 
     fun sameSetup(a:Signal,b:Signal):Boolean{if(a.symbol!=b.symbol||a.timeframe!=b.timeframe||a.direction!=b.direction)return false;val at=max(a.atr,b.atr).coerceAtLeast(1e-9);return abs(a.entry-b.entry)<=at*.55&&abs(a.sl-b.sl)<=at*.80}
-    fun setupCheck(s:Signal,c:List<Candle>):SetupCheck{if(c.size<60)return SetupCheck(true,"Waiting for enough fresh data.");if(isHighVolatility(c))return SetupCheck(false,"Pending setup invalidated by abnormal live volatility.");val last=c.last();val close=c.map{it.c};val e20=ema(close,20).last();val e50=ema(close,50).last();val rr=rsi(close,14);val m=ema(close,12).last()-ema(close,26).last();val p=c.takeLast(18).dropLast(1);val hi=p.maxOf{it.h};val lo=p.minOf{it.l};var opposite=0;if(s.direction=="BUY"){if(last.c<s.sl)return SetupCheck(false,"BUY invalidated: price closed through structural SL.");if(e20<e50)opposite++;if(rr<43)opposite++;if(m<0)opposite++;if(last.c<lo)opposite+=2;if(s.fvgType=="BULLISH"&&s.fvgLow!=null&&last.c<s.fvgLow)opposite++}else{if(last.c>s.sl)return SetupCheck(false,"SELL invalidated: price closed through structural SL.");if(e20>e50)opposite++;if(rr>57)opposite++;if(m>0)opposite++;if(last.c>hi)opposite+=2;if(s.fvgType=="BEARISH"&&s.fvgHigh!=null&&last.c>s.fvgHigh)opposite++};return if(opposite>=3)SetupCheck(false,"Original setup is no longer valid: live trend/momentum/structure changed before entry.") else SetupCheck(true,"Live setup thesis remains valid.")}
+
+    fun setupCheck(s:Signal,c:List<Candle>):SetupCheck{
+        if(c.size<60)return SetupCheck(true,"Waiting for enough fresh data.")
+        if(isHighVolatility(c))return SetupCheck(false,"Pending setup invalidated by abnormal live volatility.")
+        val last=c.last();val close=c.map{it.c};val e20=ema(close,20).last();val e50=ema(close,50).last();val rr=rsi(close,14);val m=ema(close,12).last()-ema(close,26).last();val a=atr(c,14).coerceAtLeast(1e-9)
+        val p=c.takeLast(18).dropLast(1);val hi=p.maxOf{it.h};val lo=p.minOf{it.l};var opposite=0
+        if(s.direction=="BUY"){
+            if(last.c<s.sl)return SetupCheck(false,"BUY invalidated: price closed through structural SL.")
+            if(e20<e50)opposite++;if(rr<43)opposite++;if(m<0)opposite++;if(last.c<lo)opposite+=2;if(s.fvgType=="BULLISH"&&s.fvgLow!=null&&last.c<s.fvgLow)opposite++
+        }else{
+            if(last.c>s.sl)return SetupCheck(false,"SELL invalidated: price closed through structural SL.")
+            if(e20>e50)opposite++;if(rr>57)opposite++;if(m>0)opposite++;if(last.c>hi)opposite+=2;if(s.fvgType=="BEARISH"&&s.fvgHigh!=null&&last.c>s.fvgHigh)opposite++
+        }
+        val ir=impulseRetracement(c,s.direction,a)
+        if(ir?.reversalRisk==true)return SetupCheck(false,"Original setup expired: retracement reached ${pct(ir.retracementRatio)} of the impulse with ${two(ir.speedRatio)}x retracement speed and ${two(ir.counterBodyRatio)}x counter-body strength.")
+        return if(opposite>=3)SetupCheck(false,"Original setup is no longer valid: live trend/momentum/structure changed before entry.") else SetupCheck(true,ir?.let{"Live thesis valid • retracement ${pct(it.retracementRatio)}, speed ${two(it.speedRatio)}x, counter-body ${two(it.counterBodyRatio)}x."}?:"Live setup thesis remains valid.")
+    }
+
     fun isHighVolatility(c:List<Candle>):Boolean{if(c.size<25)return false;val a=atr(c.dropLast(1),14).coerceAtLeast(1e-9);val last=c.last();val tr=max(last.h-last.l,max(abs(last.h-c[c.lastIndex-1].c),abs(last.l-c[c.lastIndex-1].c)));val recent=c.takeLast(20).dropLast(1).map{it.h-it.l}.sorted();val med=recent[recent.size/2].coerceAtLeast(1e-9);return tr>a*2.5||tr>med*3.1}
-    fun noSignalReason(symbol:String,timeframe:String,c:List<Candle>):String{if(c.size<100)return "$symbol $timeframe • waiting for enough live history.";if(isHighVolatility(c))return "$symbol $timeframe • abnormal volatility; waiting for structure to stabilize.";val close=c.map{it.c};val e20=ema(close,20).last();val e50=ema(close,50).last();val rr=rsi(close,14);return "$symbol $timeframe • no stronger confirmed setup has cleared the quality floor yet. EMA20 ${fmt(e20)}, EMA50 ${fmt(e50)}, RSI ${one(rr)}."}
+
+    fun noSignalReason(symbol:String,timeframe:String,c:List<Candle>):String{
+        if(c.size<100)return "$symbol $timeframe • waiting for enough live history."
+        if(isHighVolatility(c))return "$symbol $timeframe • abnormal volatility; waiting for structure to stabilize."
+        val close=c.map{it.c};val e20=ema(close,20).last();val e50=ema(close,50).last();val rr=rsi(close,14);val a=atr(c,14).coerceAtLeast(1e-9)
+        val b=impulseRetracement(c,"BUY",a);val s=impulseRetracement(c,"SELL",a);val best=listOfNotNull(b,s).maxByOrNull{it.continuationStrength}
+        val ir=best?.let{" Latest ${it.direction.lowercase()} impulse retracement is ${pct(it.retracementRatio)} with ${two(it.speedRatio)}x speed and ${two(it.counterBodyRatio)}x counter-body strength."}.orEmpty()
+        return "$symbol $timeframe • no stronger confirmed setup has cleared the quality floor yet. EMA20 ${fmt(e20)}, EMA50 ${fmt(e50)}, RSI ${one(rr)}.$ir"
+    }
+
+    private fun impulseRetracement(c:List<Candle>,direction:String,a:Double):IR?{
+        if(c.size<20)return null
+        val w=c.takeLast(min(48,c.size));var bestStart=-1;var bestEnd=-1;var bestScore=Double.NEGATIVE_INFINITY
+        val latestAllowedEnd=w.lastIndex-1
+        for(len in 3..9){
+            for(end in (len-1)..latestAllowedEnd){
+                val start=end-len+1;val g=w.subList(start,end+1)
+                val net=if(direction=="BUY")g.last().c-g.first().o else g.first().o-g.last().c
+                if(net<=a*.55)continue
+                val same=g.count{if(direction=="BUY")it.c>it.o else it.c<it.o}.toDouble()/len
+                val avgBody=g.map{abs(it.c-it.o)}.average().coerceAtLeast(1e-9)
+                val score=net/a+same*1.4+(avgBody/a)*.8-(w.lastIndex-end)*.055
+                if(score>bestScore){bestScore=score;bestStart=start;bestEnd=end}
+            }
+        }
+        if(bestStart<0||bestEnd<0||bestEnd>=w.lastIndex)return null
+        val impulse=w.subList(bestStart,bestEnd+1);val retr=w.subList(bestEnd+1,w.size)
+        if(retr.isEmpty()||retr.size>14)return null
+        val impulseHigh=impulse.maxOf{it.h};val impulseLow=impulse.minOf{it.l};val impulseDistance=(impulseHigh-impulseLow).coerceAtLeast(a*.35)
+        val avgImpulseBody=impulse.map{abs(it.c-it.o)}.average().coerceAtLeast(1e-9)
+        val retracementDistance=if(direction=="BUY")max(0.0,impulseHigh-retr.minOf{it.l}) else max(0.0,retr.maxOf{it.h}-impulseLow)
+        val ratio=(retracementDistance/impulseDistance).coerceAtLeast(0.0)
+        val impulseSpeed=impulseDistance/impulse.size.coerceAtLeast(1);val retraceSpeed=retracementDistance/retr.size.coerceAtLeast(1);val speedRatio=(retraceSpeed/impulseSpeed.coerceAtLeast(1e-9)).coerceAtLeast(0.0)
+        val counter=retr.filter{if(direction=="BUY")it.c<it.o else it.c>it.o};val avgCounter=if(counter.isEmpty())0.0 else counter.map{abs(it.c-it.o)}.average();val bodyRatio=(avgCounter/avgImpulseBody).coerceAtLeast(0.0)
+        val resumed=if(direction=="BUY")retr.takeLast(min(2,retr.size)).any{it.c>it.o}&&w.last().c>retr.minOf{it.c} else retr.takeLast(min(2,retr.size)).any{it.c<it.o}&&w.last().c<retr.maxOf{it.c}
+        val originBroken=if(direction=="BUY")retr.any{it.c<impulseLow-a*.05} else retr.any{it.c>impulseHigh+a*.05}
+        var strength=0
+        strength+=when{ratio<=.25->18;ratio<=.40->14;ratio<=.50->8;ratio<=.60->2;ratio<=.65->-4;else->-14}
+        strength+=when{speedRatio<.45->10;speedRatio<.70->7;speedRatio<1.0->3;speedRatio<1.25->-4;else->-9}
+        strength+=when{bodyRatio<.45->10;bodyRatio<.70->7;bodyRatio<1.0->2;bodyRatio<1.20->-4;else->-9}
+        if(retr.size<=3)strength+=3 else if(retr.size>=9)strength-=2
+        if(resumed)strength+=5
+        val reversalRisk=originBroken||(ratio>.65&&(speedRatio>.85||bodyRatio>.95))||(ratio>.58&&speedRatio>1.15&&bodyRatio>1.05)
+        return IR(direction,impulseDistance,impulse.size,avgImpulseBody,retracementDistance,retr.size,ratio,speedRatio,bodyRatio,strength,reversalRisk,impulseHigh,impulseLow,resumed)
+    }
 
     private fun bullishRsiDivergence(c:List<Candle>):Boolean{if(c.size<35)return false;val a=c.takeLast(30);val first=a.take(15);val second=a.takeLast(15);val l1=first.minOf{it.l};val l2=second.minOf{it.l};val r1=rsi(first.map{it.c},7);val r2=rsi(second.map{it.c},7);return l2<l1&&r2>r1+3}
     private fun bearishRsiDivergence(c:List<Candle>):Boolean{if(c.size<35)return false;val a=c.takeLast(30);val first=a.take(15);val second=a.takeLast(15);val h1=first.maxOf{it.h};val h2=second.maxOf{it.h};val r1=rsi(first.map{it.c},7);val r2=rsi(second.map{it.c},7);return h2>h1&&r2<r1-3}
     private fun tfMinutes(tf:String)=when(tf.lowercase(Locale.US)){"1m"->1;"5m"->5;"15m"->15;"30m"->30;"1h"->60;else->15}
-    private fun one(v:Double)=String.format(Locale.US,"%.1f",v);private fun two(v:Double)=String.format(Locale.US,"%.2f",v);private fun fmt(v:Double?)=if(v==null)"-" else if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
+    private fun one(v:Double)=String.format(Locale.US,"%.1f",v);private fun two(v:Double)=String.format(Locale.US,"%.2f",v);private fun pct(v:Double)=String.format(Locale.US,"%.0f%%",v*100.0);private fun fmt(v:Double?)=if(v==null)"-" else if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
     private fun sma(v:List<Double>,p:Int)=v.takeLast(min(p,v.size)).average();private fun ema(v:List<Double>,p:Int):List<Double>{if(v.isEmpty())return emptyList();val k=2.0/(p.coerceAtMost(v.size)+1);val out=MutableList(v.size){0.0};out[0]=v[0];for(i in 1 until v.size)out[i]=v[i]*k+out[i-1]*(1-k);return out}
     private fun rsi(v:List<Double>,p:Int):Double{if(v.size<=p)return 50.0;var g=0.0;var l=0.0;for(i in v.size-p until v.size){val d=v[i]-v[i-1];if(d>0)g+=d else l-=d};if(l==0.0)return 100.0;val rs=g/l;return 100.0-100.0/(1+rs)}
     private fun atr(c:List<Candle>,p:Int):Double{if(c.size<2)return 0.0;var sum=0.0;var n=0;for(i in max(1,c.size-p) until c.size){sum+=max(c[i].h-c[i].l,max(abs(c[i].h-c[i-1].c),abs(c[i].l-c[i-1].c)));n++};return if(n==0)0.0 else sum/n}
