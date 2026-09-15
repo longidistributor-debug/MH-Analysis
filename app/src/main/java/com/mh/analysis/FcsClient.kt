@@ -6,101 +6,99 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.ArrayDeque
+import kotlin.math.max
 
 object FcsClient {
     private data class Cache(val at:Long,val candles:List<Candle>,val credits:Int)
     private val cache=mutableMapOf<String,Cache>()
     private val requestTimes=ArrayDeque<Long>()
-
     private const val MAX_REQUESTS_PER_WINDOW=3
     private const val REQUEST_WINDOW_MS=61_000L
-    private const val FRESH_MS=18_000L
+    private val periods=listOf("1m","5m","15m","30m","1h")
 
-    @Synchronized
-    fun peek(symbol:String,period:String,length:Int=220):List<Candle>? {
-        val key="${symbol.uppercase()}|${period.trim().lowercase()}"
+    @Synchronized fun peek(symbol:String,period:String,length:Int=220):List<Candle>? {
+        val key=cacheKey(symbol,period)
         return cache[key]?.candles?.takeLast(length)
     }
 
-    @Synchronized
-    fun history(accessKey:String,symbol:String,period:String,length:Int=220,force:Boolean=false):Pair<List<Candle>,Int>{
-        val sym=symbol.uppercase()
-        val tf=period.trim().lowercase()
-        val key="$sym|$tf"
-        val now=System.currentTimeMillis()
-        val hit=cache[key]
+    @Synchronized fun hasUsableHistory(symbol:String,period:String,min:Int=100)= (cache[cacheKey(symbol,period)]?.candles?.size?:0)>=min
 
-        // Always return a genuinely fetched timeframe feed immediately while it is fresh.
-        if(!force&&hit!=null&&now-hit.at<FRESH_MS&&hit.candles.size>=60)return hit.candles.takeLast(length) to 0
+    @Synchronized fun applyLiveCandle(symbol:String,period:String,candle:Candle):Candle {
+        val key=cacheKey(symbol,period);val old=cache[key]?.candles?.toMutableList()?: mutableListOf()
+        val t=normalizeTs(candle.t);val x=candle.copy(t=t)
+        if(old.isNotEmpty()&&normalizeTs(old.last().t)==t)old[old.lastIndex]=x else {old+=x;if(old.size>12000)repeat(old.size-12000){old.removeAt(0)}}
+        cache[key]=Cache(System.currentTimeMillis(),old,0)
+        return x
+    }
 
-        // If the provider quota is currently full, never freeze the UI or throw a rate-limit
-        // error when we already have a real chart for this exact timeframe. Return the last
-        // real feed immediately and let the next refresh slot update it.
+    @Synchronized fun applyLivePrice(symbol:String,period:String,t:Long,price:Double):Candle? {
+        val key=cacheKey(symbol,period);val old=cache[key]?.candles?.toMutableList()?:return null
+        if(old.isEmpty())return null
+        val ts=normalizeTs(t);val last=old.last();val same=normalizeTs(last.t)==ts||ts==0L
+        val x=if(same)last.copy(h=max(last.h,price),l=kotlin.math.min(last.l,price),c=price) else Candle(ts,price,price,price,price,0.0)
+        if(same)old[old.lastIndex]=x else old+=x
+        if(old.size>12000)repeat(old.size-12000){old.removeAt(0)}
+        cache[key]=Cache(System.currentTimeMillis(),old,0);return x
+    }
+
+    @Synchronized fun bootstrap(accessKey:String,symbol:String,force:Boolean=false):Pair<Map<String,List<Candle>>,Int>{
+        val enough=periods.all{hasUsableHistory(symbol,it,100)}
+        if(enough&&!force)return periods.associateWith{peek(symbol,it,220)?:emptyList()} to 0
         if(!canRequestNow()){
-            if(hit!=null&&hit.candles.size>=60)return hit.candles.takeLast(length) to 0
-            throw IllegalStateException("Live feed is waiting for the next provider sync slot. The chart will refresh automatically.")
+            val any=periods.associateWith{peek(symbol,it,220)?:emptyList()}
+            if(any.values.any{it.size>=60})return any to 0
+            throw IllegalStateException("Historical seed is waiting for the next provider request slot.")
         }
-
-        val fetched=try{
-            fetchMarket(sym,accessKey,tf,length.coerceAtLeast(260))
-        }catch(e:Exception){
-            noteRequest()
-            if(hit!=null&&hit.candles.size>=60)return hit.candles.takeLast(length) to 0
-            throw e
-        }
+        val fetched=try{fetchMarket(symbol.uppercase(),accessKey,"1m",7200)}catch(e:Exception){noteRequest();throw e}
         noteRequest()
-        cache[key]=Cache(System.currentTimeMillis(),fetched.first,fetched.second)
-        return fetched.first.takeLast(length) to fetched.second
+        val one=fetched.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
+        cache[cacheKey(symbol,"1m")]=Cache(System.currentTimeMillis(),one,fetched.second)
+        for(tf in listOf("5m","15m","30m","1h")){
+            val a=aggregate(one,minutes(tf));cache[cacheKey(symbol,tf)]=Cache(System.currentTimeMillis(),a,0)
+        }
+        return periods.associateWith{peek(symbol,it,220)?:emptyList()} to fetched.second
     }
 
-    private fun trimWindow(){
-        val now=System.currentTimeMillis()
-        while(requestTimes.isNotEmpty()&&now-requestTimes.first()>=REQUEST_WINDOW_MS)requestTimes.removeFirst()
+    @Synchronized fun history(accessKey:String,symbol:String,period:String,length:Int=220,force:Boolean=false):Pair<List<Candle>,Int>{
+        val hit=peek(symbol,period,length)
+        if(!hit.isNullOrEmpty()&&hit.size>=60&&!force)return hit to 0
+        val(all,credits)=bootstrap(accessKey,symbol,force)
+        val out=all[normalizePeriod(period)]?.takeLast(length)?:emptyList()
+        if(out.size<60)throw IllegalStateException("Not enough candle history for $symbol $period")
+        return out to credits
     }
+
+    private fun aggregate(src:List<Candle>,mins:Int):List<Candle>{
+        if(mins<=1)return src
+        val sec=mins*60L;val out=mutableListOf<Candle>();var bucket=-1L;var o=0.0;var h=0.0;var l=0.0;var c=0.0;var v=0.0
+        fun flush(){if(bucket>=0)out+=Candle(bucket,o,h,l,c,v)}
+        for(x0 in src){val x=x0.copy(t=normalizeTs(x0.t));val b=(x.t/sec)*sec;if(b!=bucket){flush();bucket=b;o=x.o;h=x.h;l=x.l;c=x.c;v=x.v}else{h=max(h,x.h);l=kotlin.math.min(l,x.l);c=x.c;v+=x.v}}
+        flush();return out
+    }
+
+    private fun trimWindow(){val now=System.currentTimeMillis();while(requestTimes.isNotEmpty()&&now-requestTimes.first()>=REQUEST_WINDOW_MS)requestTimes.removeFirst()}
     private fun canRequestNow():Boolean{trimWindow();return requestTimes.size<MAX_REQUESTS_PER_WINDOW}
     private fun noteRequest(){requestTimes.addLast(System.currentTimeMillis());trimWindow()}
 
     private fun fetchMarket(symbol:String,key:String,period:String,length:Int):Pair<List<Candle>,Int>{
-        return when(symbol){
-            "XAUUSD"->fetch("forex",key,"XAUUSD",period,length,"commodity")
-            // One canonical BTC request only. A hidden fallback request could consume a second
-            // provider slot and was one cause of quota errors in earlier builds.
-            else->fetch("crypto",key,"BINANCE:BTCUSDT",period,length,"crypto")
-        }
+        return when(symbol){"XAUUSD"->fetch("forex",key,"XAUUSD",period,length,"commodity");else->fetch("crypto",key,"BINANCE:BTCUSDT",period,length,"crypto")}
     }
 
     private fun fetch(group:String,key:String,symbol:String,period:String,length:Int,type:String):Pair<List<Candle>,Int>{
-        val p=normalizePeriod(period)
-        val u="https://api-v4.fcsapi.com/$group/history?symbol=${enc(symbol)}&period=${enc(p)}&length=$length&is_chart=0&type=${enc(type)}&access_key=${enc(key)}"
-        val c=URL(u).openConnection() as HttpURLConnection
-        c.connectTimeout=12000;c.readTimeout=18000;c.requestMethod="GET"
-        val code=c.responseCode
-        val body=(if(code in 200..299)c.inputStream else c.errorStream).bufferedReader().use{it.readText()}
+        val p=normalizePeriod(period);val u="https://api-v4.fcsapi.com/$group/history?symbol=${enc(symbol)}&period=${enc(p)}&length=$length&is_chart=0&type=${enc(type)}&access_key=${enc(key)}"
+        val c=URL(u).openConnection() as HttpURLConnection;c.connectTimeout=12000;c.readTimeout=22000;c.requestMethod="GET"
+        val code=c.responseCode;val body=(if(code in 200..299)c.inputStream else c.errorStream).bufferedReader().use{it.readText()}
         if(code !in 200..299)throw IllegalStateException("Market data HTTP $code")
-        val root=JSONObject(body)
-        if(root.has("status")&&!root.optBoolean("status",true)){
-            val msg=root.optString("msg","Market data request failed")
-            if(msg.contains("rate limit",true))throw IllegalStateException("Provider request limit reached; the last real chart remains active until the next sync slot.")
-            throw IllegalStateException(msg)
-        }
-        val credits=root.optJSONObject("info")?.optInt("credit_count",1)?:1
-        val response=root.opt("response")?:root.opt("data")?:root
-        val candles=mutableListOf<Candle>()
-        fun add(o:JSONObject,k:String=""){
-            if(!o.has("o")||!o.has("c"))return
-            candles+=Candle(o.optLong("t",k.toLongOrNull()?:0L),o.optDouble("o"),o.optDouble("h"),o.optDouble("l"),o.optDouble("c"),o.optDouble("v",0.0))
-        }
-        when(response){
-            is JSONArray->for(i in 0 until response.length())response.optJSONObject(i)?.let{add(it)}
-            is JSONObject->{val it=response.keys();while(it.hasNext()){val k=it.next();response.optJSONObject(k)?.let{add(it,k)}}}
-        }
-        candles.sortBy{it.t}
-        if(candles.size<60)throw IllegalStateException("Not enough live candle data for $symbol $period")
-        return candles to credits
+        val root=JSONObject(body);if(root.has("status")&&!root.optBoolean("status",true))throw IllegalStateException(root.optString("msg","Market data request failed"))
+        val credits=root.optJSONObject("info")?.optInt("credit_count",1)?:1;val response=root.opt("response")?:root.opt("data")?:root;val candles=mutableListOf<Candle>()
+        fun add(o:JSONObject,k:String=""){if(!o.has("o")||!o.has("c"))return;candles+=Candle(normalizeTs(o.optLong("t",k.toLongOrNull()?:0L)),o.optDouble("o"),o.optDouble("h"),o.optDouble("l"),o.optDouble("c"),o.optDouble("v",0.0))}
+        when(response){is JSONArray->for(i in 0 until response.length())response.optJSONObject(i)?.let{add(it)};is JSONObject->{val it=response.keys();while(it.hasNext()){val k=it.next();response.optJSONObject(k)?.let{add(it,k)}}}}
+        candles.sortBy{it.t};if(candles.size<60)throw IllegalStateException("Not enough live candle data for $symbol $period");return candles to credits
     }
 
-    private fun normalizePeriod(p:String)=when(p.trim().lowercase()){
-        "1m"->"1m";"5m"->"5m";"15m"->"15m";"30m"->"30m";"1h"->"1h";else->p
-    }
+    private fun normalizePeriod(p:String)=when(p.trim().lowercase()){ "1m"->"1m";"5m"->"5m";"15m"->"15m";"30m"->"30m";"1h"->"1h";else->p.trim().lowercase() }
+    private fun minutes(tf:String)=when(tf.lowercase()){ "1m"->1;"5m"->5;"15m"->15;"30m"->30;"1h"->60;else->1 }
+    private fun cacheKey(symbol:String,period:String)="${symbol.uppercase()}|${normalizePeriod(period)}"
+    private fun normalizeTs(t:Long)=if(t>9_999_999_999L)t/1000L else t
     private fun enc(s:String)=URLEncoder.encode(s,"UTF-8")
 }
