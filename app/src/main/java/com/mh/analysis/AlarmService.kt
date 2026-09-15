@@ -20,7 +20,7 @@ class AlarmService:Service(){
     override fun onCreate(){super.onCreate();FcsClient.init(this);createChannels();startForeground(311,serviceNotification("Starting background signal tracking"));h.post(tick)}
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int{if(intent?.action=="STOP"){stopSelf();return START_NOT_STICKY};if(running)h.removeCallbacks(tick);h.post(tick);return START_STICKY}
 
-    private val tick=object:Runnable{
+    private val tick:Runnable=object:Runnable{
         override fun run(){
             if(!running)return
             val key=prefs.getString("api_key","")?.trim().orEmpty()
@@ -37,10 +37,12 @@ class AlarmService:Service(){
             updateService("Tracking ${pending.size} pending • ${open.size} open • ${task.symbol} ${task.timeframe}")
             thread(name="mh-rest-monitor"){
                 runCatching{if(task.kind=="LIFE")pollLifecycle(key,task.symbol) else pollStructure(key,task.symbol,task.timeframe)}
-                h.postDelayed(tick,21_500L)
+                scheduleNext(21_500L)
             }
         }
     }
+
+    private fun scheduleNext(ms:Long){h.postDelayed({if(running)tick.run()},ms)}
 
     private fun pollLifecycle(key:String,symbol:String){
         val(out,credits)=FcsClient.history(key,symbol,"1m",220,true);addUsage(credits)
