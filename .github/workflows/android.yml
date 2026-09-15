@@ -22,10 +22,11 @@ jobs:
           gradle-version: '8.10.2'
       - run: python3 scripts/patch_v31.py
       - run: python3 scripts/patch_alarm_v31.py
+      - run: python3 scripts/patch_v32.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v31.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v32.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v31.apk
+          path: MH-Analysis-v32.apk
           if-no-files-found: error
