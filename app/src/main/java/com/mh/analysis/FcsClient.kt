@@ -12,12 +12,15 @@ object FcsClient {
     private data class Cache(val at:Long,val candles:List<Candle>,val credits:Int)
     private val cache=mutableMapOf<String,Cache>()
     private val requestTimes=ArrayDeque<Long>()
+    private val preferred=mutableMapOf<String,String>()
     private const val MAX_REQUESTS_PER_WINDOW=3
     private const val REQUEST_WINDOW_MS=61_000L
     private val periods=listOf("1m","5m","15m","30m","1h")
 
-    @Synchronized fun peek(symbol:String,period:String,length:Int=220):List<Candle>? =
-        cache[cacheKey(symbol,period)]?.candles?.takeLast(length)
+    @Synchronized fun peek(symbol:String,period:String,length:Int=220):List<Candle>? {
+        preferred[symbol.uppercase()]=normalizePeriod(period)
+        return cache[cacheKey(symbol,period)]?.candles?.takeLast(length)
+    }
 
     @Synchronized fun hasUsableHistory(symbol:String,period:String,min:Int=100)=
         (cache[cacheKey(symbol,period)]?.candles?.size?:0)>=min
@@ -26,8 +29,6 @@ object FcsClient {
         val key=cacheKey(symbol,period)
         val t=normalizeTs(candle.t)
         val x=candle.copy(t=t)
-        // Do not let an initial socket candle masquerade as historical chart readiness.
-        // History bootstrap must seed the chart first; after that the socket owns updates.
         val existing=cache[key]?:return x
         val old=existing.candles.toMutableList()
         if(old.isNotEmpty()&&normalizeTs(old.last().t)==t)old[old.lastIndex]=x
@@ -56,52 +57,74 @@ object FcsClient {
     }
 
     /**
-     * One bootstrap seeds every app timeframe with at most THREE REST requests:
-     * 1m x 600 -> native 1m + aggregated 5m
-     * 15m x 300 -> native 15m + aggregated 30m
-     * 1h x 300 -> native 1h
-     * WebSocket then drives all current candles continuously. Timeframe switching itself
-     * does not spend a REST credit once this seed exists.
+     * Progressive seed. The family containing the last requested UI timeframe is fetched first.
+     * A failed family never discards successful history from another family.
+     * Families:
+     * 1m x 600 -> 1m + 5m
+     * 15m x 300 -> 15m + 30m
+     * 1h x 300 -> 1h
      */
     @Synchronized fun bootstrap(accessKey:String,symbol:String,force:Boolean=false):Pair<Map<String,List<Candle>>,Int>{
-        val enough=periods.all{hasUsableHistory(symbol,it,100)}
-        if(enough&&!force)return periods.associateWith{peek(symbol,it,220)?:emptyList()} to 0
+        val sym=symbol.uppercase()
+        val enough=periods.all{hasUsableHistory(sym,it,100)}
+        if(enough&&!force)return periods.associateWith{cache[cacheKey(sym,it)]?.candles?.takeLast(220)?:emptyList()} to 0
 
         var credits=0
-        fun request(period:String,length:Int):List<Candle>{
-            if(!canRequestNow())throw IllegalStateException("Historical seed is waiting for the next provider request slot.")
-            val out=try{fetchMarket(symbol.uppercase(),accessKey,period,length)}catch(e:Exception){noteRequest();throw e}
-            noteRequest();credits+=out.second
-            return out.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
+        var lastError=""
+
+        fun request(period:String,length:Int):List<Candle>?{
+            if(!canRequestNow()){lastError="Historical seed is waiting for the next provider request slot.";return null}
+            return try{
+                val out=fetchMarket(sym,accessKey,period,length)
+                noteRequest();credits+=out.second
+                out.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
+            }catch(e:Exception){
+                noteRequest();lastError=e.message?:"History request failed";null
+            }
         }
 
-        var one=peek(symbol,"1m",12000).orEmpty()
-        if(force||one.size<600){one=request("1m",600);cache[cacheKey(symbol,"1m")]=Cache(System.currentTimeMillis(),one,0)}
-        if(one.isNotEmpty())cache[cacheKey(symbol,"5m")]=Cache(System.currentTimeMillis(),aggregate(one,5),0)
+        fun seedOneMinute(){
+            var one=cache[cacheKey(sym,"1m")]?.candles.orEmpty()
+            if(force||one.size<600){request("1m",600)?.let{one=it;cache[cacheKey(sym,"1m")]=Cache(System.currentTimeMillis(),one,0)}}
+            if(one.isNotEmpty())cache[cacheKey(sym,"5m")]=Cache(System.currentTimeMillis(),aggregate(one,5),0)
+        }
+        fun seedFifteen(){
+            var fifteen=cache[cacheKey(sym,"15m")]?.candles.orEmpty()
+            if(force||fifteen.size<300){request("15m",300)?.let{fifteen=it;cache[cacheKey(sym,"15m")]=Cache(System.currentTimeMillis(),fifteen,0)}}
+            if(fifteen.isNotEmpty())cache[cacheKey(sym,"30m")]=Cache(System.currentTimeMillis(),aggregate(fifteen,30),0)
+        }
+        fun seedHour(){
+            var hour=cache[cacheKey(sym,"1h")]?.candles.orEmpty()
+            if(force||hour.size<300){request("1h",300)?.let{hour=it;cache[cacheKey(sym,"1h")]=Cache(System.currentTimeMillis(),hour,0)}}
+        }
 
-        var fifteen=peek(symbol,"15m",12000).orEmpty()
-        if(force||fifteen.size<300){fifteen=request("15m",300);cache[cacheKey(symbol,"15m")]=Cache(System.currentTimeMillis(),fifteen,0)}
-        if(fifteen.isNotEmpty())cache[cacheKey(symbol,"30m")]=Cache(System.currentTimeMillis(),aggregate(fifteen,30,15),0)
+        val p=preferred[sym]?:"15m"
+        val order=when(p){
+            "1m","5m"->listOf(0,1,2)
+            "1h"->listOf(2,1,0)
+            else->listOf(1,0,2)
+        }
+        for(f in order){
+            when(f){0->seedOneMinute();1->seedFifteen();2->seedHour()}
+        }
 
-        var hour=peek(symbol,"1h",12000).orEmpty()
-        if(force||hour.size<300){hour=request("1h",300);cache[cacheKey(symbol,"1h")]=Cache(System.currentTimeMillis(),hour,0)}
-
-        val result=periods.associateWith{peek(symbol,it,220)?:emptyList()}
-        if(result.values.none{it.size>=60})throw IllegalStateException("No usable historical seed was returned for $symbol")
+        val result=periods.associateWith{cache[cacheKey(sym,it)]?.candles?.takeLast(220)?:emptyList()}
+        if(result.values.none{it.size>=60})throw IllegalStateException(if(lastError.isBlank())"No usable historical seed was returned for $sym" else lastError)
         return result to credits
     }
 
     @Synchronized fun history(accessKey:String,symbol:String,period:String,length:Int=220,force:Boolean=false):Pair<List<Candle>,Int>{
-        val hit=peek(symbol,period,length)
+        preferred[symbol.uppercase()]=normalizePeriod(period)
+        val hit=cache[cacheKey(symbol,period)]?.candles?.takeLast(length)
         if(!hit.isNullOrEmpty()&&hit.size>=100&&!force)return hit to 0
         val(all,credits)=bootstrap(accessKey,symbol,force)
         val out=all[normalizePeriod(period)]?.takeLast(length)?:emptyList()
-        if(out.size<60)throw IllegalStateException("Not enough candle history for $symbol $period")
+        if(out.size<60)throw IllegalStateException("$symbol $period history is still seeding. Live stream stays connected and this timeframe will appear automatically.")
         return out to credits
     }
 
-    private fun aggregate(src:List<Candle>,targetMins:Int,sourceMins:Int=1):List<Candle>{
-        if(targetMins<=sourceMins)return src
+    private fun aggregate(src:List<Candle>,targetMins:Int):List<Candle>{
+        if(targetMins<=1)return src
         val sec=targetMins*60L
         val out=mutableListOf<Candle>()
         var bucket=-1L;var o=0.0;var h=0.0;var l=0.0;var c=0.0;var v=0.0
