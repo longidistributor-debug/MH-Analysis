@@ -16,18 +16,20 @@ object FcsClient {
     private const val REQUEST_WINDOW_MS=61_000L
     private val periods=listOf("1m","5m","15m","30m","1h")
 
-    @Synchronized fun peek(symbol:String,period:String,length:Int=220):List<Candle>? {
-        return cache[cacheKey(symbol,period)]?.candles?.takeLast(length)
-    }
+    @Synchronized fun peek(symbol:String,period:String,length:Int=220):List<Candle>? =
+        cache[cacheKey(symbol,period)]?.candles?.takeLast(length)
 
     @Synchronized fun hasUsableHistory(symbol:String,period:String,min:Int=100)=
         (cache[cacheKey(symbol,period)]?.candles?.size?:0)>=min
 
     @Synchronized fun applyLiveCandle(symbol:String,period:String,candle:Candle):Candle {
         val key=cacheKey(symbol,period)
-        val old=cache[key]?.candles?.toMutableList()?: mutableListOf()
         val t=normalizeTs(candle.t)
         val x=candle.copy(t=t)
+        // Do not let an initial socket candle masquerade as historical chart readiness.
+        // History bootstrap must seed the chart first; after that the socket owns updates.
+        val existing=cache[key]?:return x
+        val old=existing.candles.toMutableList()
         if(old.isNotEmpty()&&normalizeTs(old.last().t)==t)old[old.lastIndex]=x
         else{
             old+=x
@@ -39,17 +41,13 @@ object FcsClient {
 
     @Synchronized fun applyLivePrice(symbol:String,period:String,t:Long,price:Double):Candle? {
         val key=cacheKey(symbol,period)
-        val old=cache[key]?.candles?.toMutableList()?: mutableListOf()
+        val existing=cache[key]?:return null
+        val old=existing.candles.toMutableList()
+        if(old.isEmpty())return null
         val ts=normalizeTs(t)
-        if(old.isEmpty()){
-            val x=Candle(ts,price,price,price,price,0.0)
-            old+=x
-            cache[key]=Cache(System.currentTimeMillis(),old,0)
-            return x
-        }
         val last=old.last()
         val same=normalizeTs(last.t)==ts||ts==0L
-        val x=if(same) last.copy(h=max(last.h,price),l=kotlin.math.min(last.l,price),c=price)
+        val x=if(same)last.copy(h=max(last.h,price),l=kotlin.math.min(last.l,price),c=price)
         else Candle(ts,price,price,price,price,0.0)
         if(same)old[old.lastIndex]=x else old+=x
         if(old.size>12000)repeat(old.size-12000){old.removeAt(0)}
@@ -58,12 +56,12 @@ object FcsClient {
     }
 
     /**
-     * One bootstrap seeds every app timeframe. It deliberately uses at most THREE REST requests:
+     * One bootstrap seeds every app timeframe with at most THREE REST requests:
      * 1m x 600 -> native 1m + aggregated 5m
      * 15m x 300 -> native 15m + aggregated 30m
      * 1h x 300 -> native 1h
-     * After this, WebSocket updates the active/current candles continuously and timeframe
-     * switching does not need another REST request.
+     * WebSocket then drives all current candles continuously. Timeframe switching itself
+     * does not spend a REST credit once this seed exists.
      */
     @Synchronized fun bootstrap(accessKey:String,symbol:String,force:Boolean=false):Pair<Map<String,List<Candle>>,Int>{
         val enough=periods.all{hasUsableHistory(symbol,it,100)}
@@ -77,7 +75,6 @@ object FcsClient {
             return out.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
         }
 
-        // Keep any usable existing history and only fetch missing seed families unless force=true.
         var one=peek(symbol,"1m",12000).orEmpty()
         if(force||one.size<600){one=request("1m",600);cache[cacheKey(symbol,"1m")]=Cache(System.currentTimeMillis(),one,0)}
         if(one.isNotEmpty())cache[cacheKey(symbol,"5m")]=Cache(System.currentTimeMillis(),aggregate(one,5),0)
@@ -146,10 +143,7 @@ object FcsClient {
         val candles=mutableListOf<Candle>()
         fun add(o:JSONObject,k:String=""){
             if(!o.has("o")||!o.has("c"))return
-            candles+=Candle(
-                normalizeTs(o.optLong("t",k.toLongOrNull()?:0L)),
-                o.optDouble("o"),o.optDouble("h"),o.optDouble("l"),o.optDouble("c"),o.optDouble("v",0.0)
-            )
+            candles+=Candle(normalizeTs(o.optLong("t",k.toLongOrNull()?:0L)),o.optDouble("o"),o.optDouble("h"),o.optDouble("l"),o.optDouble("c"),o.optDouble("v",0.0))
         }
         when(response){
             is JSONArray->for(i in 0 until response.length())response.optJSONObject(i)?.let{add(it)}
