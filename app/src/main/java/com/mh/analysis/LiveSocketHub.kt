@@ -14,7 +14,8 @@ object LiveSocketHub {
         fun onLiveCandle(symbol:String,timeframe:String,candle:Candle) {}
     }
 
-    private const val SOCKET_URL="wss://ws-v4.fcsapi.com/ws/"
+    // Exact FCS production endpoint shown in the user's dashboard/docs.
+    private const val SOCKET_URL="wss://ws-v4.fcsapi.com/ws"
     private val listeners=CopyOnWriteArraySet<Listener>()
     private val main=Handler(Looper.getMainLooper())
     private val client=OkHttpClient.Builder().pingInterval(30,TimeUnit.SECONDS).readTimeout(0,TimeUnit.MILLISECONDS).retryOnConnectionFailure(true).build()
@@ -54,7 +55,7 @@ object LiveSocketHub {
     @Synchronized private fun connect(){
         if(manualStop||apiKey.isBlank()||socket!=null)return
         notifyState(if(reconnects==0)"LIVE STREAM CONNECTING" else "LIVE STREAM RECONNECTING • attempt $reconnects")
-        val req=Request.Builder().url("$SOCKET_URL?access_key=${apiKey}").build()
+        val req=Request.Builder().url("$SOCKET_URL?access_key=$apiKey").build()
         socket=client.newWebSocket(req,object:WebSocketListener(){
             override fun onOpen(ws:WebSocket,response:Response){notifyState("LIVE SOCKET OPEN • AUTHENTICATING")}
             override fun onMessage(ws:WebSocket,text:String){handleMessage(ws,text)}
