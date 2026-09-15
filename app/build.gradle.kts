@@ -1,6 +1,6 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.android")
 }
 
 android {
@@ -11,8 +11,8 @@ android {
         applicationId = "com.mh.analysis"
         minSdk = 26
         targetSdk = 33
-        versionCode = 17
-        versionName = "17.0"
+        versionCode = 18
+        versionName = "18.0"
     }
 
     buildTypes {
