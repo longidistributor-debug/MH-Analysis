@@ -30,38 +30,41 @@ class AlarmService:Service(){
 
                 val symbol=symbols[symbolIndex%symbols.size];symbolIndex++
                 val armedBefore=AlarmStore.armed(this).filter{it.symbol==symbol}.associateBy{it.signalId}
-                runCatching{
-                    val oneMin=FcsClient.history(key,symbol,"1m",180,false).first
-                    val last=oneMin.lastOrNull()
-                    if(last!=null){
-                        if(AnalysisEngine.isHighVolatility(oneMin)){
-                            val lastVol=prefs.getLong("vol_notice_$symbol",0L)
-                            if(System.currentTimeMillis()-lastVol>10*60_000L){
-                                prefs.edit().putLong("vol_notice_$symbol",System.currentTimeMillis()).apply()
-                                val expired=SignalStore.expireAllPendingForVolatility(this,symbol,lastTime(last.t))
-                                notifyVolatility(symbol,expired.size)
-                            }
-                        }else{
-                            val events=SignalStore.processMinuteCandle(this,symbol,last)
-                            events.forEach{e->
-                                val alarm=armedBefore[e.signal.id]
-                                when(e.state){
-                                    "ACTIVE"->if(alarm!=null){val hit=alarm.copy(enabled=false,status="TRIGGERED",triggeredAt=System.currentTimeMillis(),armedAt=null);AlarmStore.update(this,hit);fireThreeCycles(hit)}
-                                    "EXPIRED"->alarm?.let{notifyState(it.copy(status="EXPIRED",enabled=false),"SETUP NO LONGER VALID before entry. It was removed from active monitoring and recorded as expired.")}
-                                    "WIN","LOSS"->notifyTrade(e.signal,e.state)
-                                }
+
+                // Do not let the background service steal a quota slot from the visible chart.
+                // Use an already-fetched real 1m feed first; only request if absolutely no 1m data exists.
+                val oneMin=FcsClient.peek(symbol,"1m",180) ?: runCatching{FcsClient.history(key,symbol,"1m",180,false).first}.getOrNull()
+                val last=oneMin?.lastOrNull()
+                if(last!=null){
+                    if(AnalysisEngine.isHighVolatility(oneMin)){
+                        val lastVol=prefs.getLong("vol_notice_$symbol",0L)
+                        if(System.currentTimeMillis()-lastVol>10*60_000L){
+                            prefs.edit().putLong("vol_notice_$symbol",System.currentTimeMillis()).apply()
+                            val expired=SignalStore.expireAllPendingForVolatility(this,symbol,lastTime(last.t))
+                            notifyVolatility(symbol,expired.size)
+                        }
+                    }else{
+                        val events=SignalStore.processMinuteCandle(this,symbol,last)
+                        events.forEach{e->
+                            val alarm=armedBefore[e.signal.id]
+                            when(e.state){
+                                "ACTIVE"->if(alarm!=null){val hit=alarm.copy(enabled=false,status="TRIGGERED",triggeredAt=System.currentTimeMillis(),armedAt=null);AlarmStore.update(this,hit);fireThreeCycles(hit)}
+                                "EXPIRED"->alarm?.let{notifyState(it.copy(status="EXPIRED",enabled=false),"SETUP NO LONGER VALID before entry. It was removed from active monitoring and recorded as expired.")}
+                                "WIN","LOSS"->notifyTrade(e.signal,e.state)
                             }
                         }
                     }
                 }
 
+                // Validate pending setup structure from that signal's exact timeframe feed.
+                // Cache-first means 1m/5m/15m/30m/1h remain independent without quota fights.
                 val now=System.currentTimeMillis()
-                if(now-lastStructureCheck>=60_000L){
+                if(now-lastStructureCheck>=45_000L){
                     val tfPending=SignalStore.pendingSignals(this)
                     if(tfPending.isNotEmpty()){
                         val a=tfPending[tfIndex%tfPending.size];tfIndex++
-                        runCatching{
-                            val candles=FcsClient.history(key,a.signal.symbol,a.signal.timeframe,180,false).first
+                        val candles=FcsClient.peek(a.signal.symbol,a.signal.timeframe,180)
+                        if(candles!=null&&candles.size>=60){
                             val before=SignalStore.loadActive(this,a.signal.symbol,a.signal.timeframe)
                             if(before!=null){
                                 val result=SignalStore.evaluate(this,a.signal.symbol,a.signal.timeframe,candles)
@@ -72,8 +75,8 @@ class AlarmService:Service(){
                     lastStructureCheck=now
                 }
                 updateService("Pending ${SignalStore.pendingSignals(this).size} • Open ${SignalStore.openTrades(this).size} • Armed ${AlarmStore.armed(this).size}")
-            }catch(e:Exception){updateService("Background tracking active • market sync waiting")}
-            sleep(20_000)
+            }catch(_:Exception){updateService("Background tracking active • market sync waiting")}
+            sleep(8_000)
         }
     }
 
