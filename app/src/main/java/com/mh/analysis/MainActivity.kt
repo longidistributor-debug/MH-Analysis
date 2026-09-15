@@ -77,20 +77,24 @@ class MainActivity:Activity(){
         if(!chartReady)return;val k=savedKey();if(k.isBlank()){status.text="DATA KEY REQUIRED";return}
         if(busy){queuedLoad=true;queuedForce=queuedForce||force;return}
         busy=true;val reqSymbol=symbol;val reqPeriod=period;val reqGeneration=selectionGeneration
-        thread{try{
-            val(data,credits)=FcsClient.history(k,reqSymbol,reqPeriod,220,force)
-            val eval=SignalStore.evaluate(this,reqSymbol,reqPeriod,data)
-            runOnUiThread{
-                if(credits>0)addUsage(credits);calls.text="Calls: ${usage()}/500"
-                val current=reqGeneration==selectionGeneration&&reqSymbol==symbol&&reqPeriod==period
-                if(current){candles=data;loadedSymbol=reqSymbol;loadedPeriod=reqPeriod;loadedAt=System.currentTimeMillis();render(data,reqSymbol,reqPeriod);pairLabel.text="$reqSymbol • $reqPeriod";if(eval!=null&&eval.state in setOf("WIN","LOSS","EXPIRED"))showExisting() else showExisting();consumePendingAnalyze(reqSymbol,reqPeriod)}
-                busy=false;drainQueuedLoad()
+        thread{
+            try{
+                val(data,credits)=FcsClient.history(k,reqSymbol,reqPeriod,220,force)
+                val eval=SignalStore.evaluate(this,reqSymbol,reqPeriod,data)
+                runOnUiThread{
+                    if(credits>0)addUsage(credits);calls.text="Calls: ${usage()}/500"
+                    val current=reqGeneration==selectionGeneration&&reqSymbol==symbol&&reqPeriod==period
+                    if(current){candles=data;loadedSymbol=reqSymbol;loadedPeriod=reqPeriod;loadedAt=System.currentTimeMillis();render(data,reqSymbol,reqPeriod);pairLabel.text="$reqSymbol • $reqPeriod";showExisting();consumePendingAnalyze(reqSymbol,reqPeriod)}
+                    busy=false;drainQueuedLoad()
+                }
+            }catch(e:Exception){
+                runOnUiThread{
+                    val current=reqGeneration==selectionGeneration&&reqSymbol==symbol&&reqPeriod==period
+                    if(current){val cached=FcsClient.peek(reqSymbol,reqPeriod,220);if(!cached.isNullOrEmpty()){candles=cached;loadedSymbol=reqSymbol;loadedPeriod=reqPeriod;loadedAt=System.currentTimeMillis();render(cached,reqSymbol,reqPeriod);showExisting();consumePendingAnalyze(reqSymbol,reqPeriod)}else{status.text="$reqSymbol • $reqPeriod\nWAITING FOR LIVE FEED • automatic retry";if(chartReady)chart.evaluateJavascript("showMessage(${JSONObject.quote("WAITING FOR PROVIDER SYNC • AUTO RETRY")})",null)}}
+                    busy=false;drainQueuedLoad()
+                }
             }
-        }catch(e:Exception){runOnUiThread{
-            val current=reqGeneration==selectionGeneration&&reqSymbol==symbol&&reqPeriod==period
-            if(current){val cached=FcsClient.peek(reqSymbol,reqPeriod,220);if(!cached.isNullOrEmpty()){candles=cached;loadedSymbol=reqSymbol;loadedPeriod=reqPeriod;loadedAt=System.currentTimeMillis();render(cached,reqSymbol,reqPeriod);showExisting();consumePendingAnalyze(reqSymbol,reqPeriod)}else{status.text="$reqSymbol • $reqPeriod\nWAITING FOR LIVE FEED • automatic retry";if(chartReady)chart.evaluateJavascript("showMessage(${JSONObject.quote("WAITING FOR PROVIDER SYNC • AUTO RETRY")})",null)}}
-            busy=false;drainQueuedLoad()
-        }}
+        }
     }
     private fun drainQueuedLoad(){if(!queuedLoad)return;val f=queuedForce;queuedLoad=false;queuedForce=false;load(f)}
 
