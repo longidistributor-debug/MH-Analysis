@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;background:#131722;overflow:hidden;font-family:Arial,sans-serif}
+#tvroot{position:absolute;inset:0;background:#131722}
+#widget{position:absolute;inset:0}
+#signalCard{position:absolute;right:10px;top:10px;z-index:1000;display:none;max-width:205px;background:rgba(7,10,15,.88);border:1px solid rgba(255,255,255,.20);border-radius:10px;padding:8px 10px;color:#fff;font-size:10px;line-height:1.45;pointer-events:none;box-shadow:0 4px 18px rgba(0,0,0,.35)}
+#signalCard b{font-size:12px}
+#state{position:absolute;left:10px;bottom:8px;z-index:1000;background:rgba(7,10,15,.72);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:#c6cbd4;font-size:9px;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="tvroot"><div id="widget" class="tradingview-widget-container"></div><div id="signalCard"></div><div id="state">TradingView live chart</div></div>
+<script>
+let currentSymbol='OANDA:XAUUSD', currentInterval='15';
+function mapSymbol(s){s=String(s||'').toUpperCase();return s==='BTCUSDT'?'BINANCE:BTCUSDT':'OANDA:XAUUSD'}
+function mapInterval(p){p=String(p||'15m').toLowerCase();if(p==='1m'||p==='1')return'1';if(p==='5m'||p==='5')return'5';if(p==='15m'||p==='15')return'15';if(p==='30m'||p==='30')return'30';return'60'}
+function loadTradingView(symbol,period){
+  currentSymbol=mapSymbol(symbol);currentInterval=mapInterval(period);
+  const host=document.getElementById('widget');host.innerHTML='';
+  const inner=document.createElement('div');inner.className='tradingview-widget-container__widget';inner.style.width='100%';inner.style.height='100%';host.appendChild(inner);
+  const script=document.createElement('script');script.type='text/javascript';script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';script.async=true;
+  script.innerHTML=JSON.stringify({autosize:true,symbol:currentSymbol,interval:currentInterval,timezone:'Asia/Karachi',theme:'dark',backgroundColor:'#131722',style:'1',locale:'en',hide_top_toolbar:false,hide_side_toolbar:false,allow_symbol_change:false,save_image:false,calendar:false,details:false,hotlist:false,withdateranges:true,support_host:'https://www.tradingview.com'});
+  script.onerror=()=>{document.getElementById('state').textContent='TradingView chart network error'};
+  host.appendChild(script);
+  document.getElementById('state').textContent=(symbol||'XAUUSD')+' • '+(period||'15m')+' • LIVE';
+}
+function setSignalCard(raw){
+  const el=document.getElementById('signalCard');
+  if(!raw){el.style.display='none';el.textContent='';return}
+  let s=raw;try{if(typeof raw==='string')s=JSON.parse(raw)}catch(e){el.style.display='none';return}
+  const fmt=v=>{const n=Number(v);return Number.isFinite(n)?(Math.abs(n)>=100?n.toFixed(2):n.toFixed(5)):'-'};
+  el.innerHTML='<b>'+String(s.direction||'SETUP')+' • '+String(s.state||'')+'</b><br>Entry '+fmt(s.entry)+'<br>SL '+fmt(s.sl)+'<br>TP1 '+fmt(s.tp1)+'<br>TP2 '+fmt(s.tp2)+'<br>Score '+String(s.score||'-')+'/100';
+  el.style.display='block';
+}
+function clearSignalCard(){setSignalCard(null)}
+</script>
+</body>
+</html>
