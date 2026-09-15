@@ -17,87 +17,152 @@ object FcsClient {
     private val periods=listOf("1m","5m","15m","30m","1h")
 
     @Synchronized fun peek(symbol:String,period:String,length:Int=220):List<Candle>? {
-        val key=cacheKey(symbol,period)
-        return cache[key]?.candles?.takeLast(length)
+        return cache[cacheKey(symbol,period)]?.candles?.takeLast(length)
     }
 
-    @Synchronized fun hasUsableHistory(symbol:String,period:String,min:Int=100)= (cache[cacheKey(symbol,period)]?.candles?.size?:0)>=min
+    @Synchronized fun hasUsableHistory(symbol:String,period:String,min:Int=100)=
+        (cache[cacheKey(symbol,period)]?.candles?.size?:0)>=min
 
     @Synchronized fun applyLiveCandle(symbol:String,period:String,candle:Candle):Candle {
-        val key=cacheKey(symbol,period);val old=cache[key]?.candles?.toMutableList()?: mutableListOf()
-        val t=normalizeTs(candle.t);val x=candle.copy(t=t)
-        if(old.isNotEmpty()&&normalizeTs(old.last().t)==t)old[old.lastIndex]=x else {old+=x;if(old.size>12000)repeat(old.size-12000){old.removeAt(0)}}
+        val key=cacheKey(symbol,period)
+        val old=cache[key]?.candles?.toMutableList()?: mutableListOf()
+        val t=normalizeTs(candle.t)
+        val x=candle.copy(t=t)
+        if(old.isNotEmpty()&&normalizeTs(old.last().t)==t)old[old.lastIndex]=x
+        else{
+            old+=x
+            if(old.size>12000)repeat(old.size-12000){old.removeAt(0)}
+        }
         cache[key]=Cache(System.currentTimeMillis(),old,0)
         return x
     }
 
     @Synchronized fun applyLivePrice(symbol:String,period:String,t:Long,price:Double):Candle? {
-        val key=cacheKey(symbol,period);val old=cache[key]?.candles?.toMutableList()?:return null
-        if(old.isEmpty())return null
-        val ts=normalizeTs(t);val last=old.last();val same=normalizeTs(last.t)==ts||ts==0L
-        val x=if(same)last.copy(h=max(last.h,price),l=kotlin.math.min(last.l,price),c=price) else Candle(ts,price,price,price,price,0.0)
+        val key=cacheKey(symbol,period)
+        val old=cache[key]?.candles?.toMutableList()?: mutableListOf()
+        val ts=normalizeTs(t)
+        if(old.isEmpty()){
+            val x=Candle(ts,price,price,price,price,0.0)
+            old+=x
+            cache[key]=Cache(System.currentTimeMillis(),old,0)
+            return x
+        }
+        val last=old.last()
+        val same=normalizeTs(last.t)==ts||ts==0L
+        val x=if(same) last.copy(h=max(last.h,price),l=kotlin.math.min(last.l,price),c=price)
+        else Candle(ts,price,price,price,price,0.0)
         if(same)old[old.lastIndex]=x else old+=x
         if(old.size>12000)repeat(old.size-12000){old.removeAt(0)}
-        cache[key]=Cache(System.currentTimeMillis(),old,0);return x
+        cache[key]=Cache(System.currentTimeMillis(),old,0)
+        return x
     }
 
+    /**
+     * One bootstrap seeds every app timeframe. It deliberately uses at most THREE REST requests:
+     * 1m x 600 -> native 1m + aggregated 5m
+     * 15m x 300 -> native 15m + aggregated 30m
+     * 1h x 300 -> native 1h
+     * After this, WebSocket updates the active/current candles continuously and timeframe
+     * switching does not need another REST request.
+     */
     @Synchronized fun bootstrap(accessKey:String,symbol:String,force:Boolean=false):Pair<Map<String,List<Candle>>,Int>{
         val enough=periods.all{hasUsableHistory(symbol,it,100)}
         if(enough&&!force)return periods.associateWith{peek(symbol,it,220)?:emptyList()} to 0
-        if(!canRequestNow()){
-            val any=periods.associateWith{peek(symbol,it,220)?:emptyList()}
-            if(any.values.any{it.size>=60})return any to 0
-            throw IllegalStateException("Historical seed is waiting for the next provider request slot.")
+
+        var credits=0
+        fun request(period:String,length:Int):List<Candle>{
+            if(!canRequestNow())throw IllegalStateException("Historical seed is waiting for the next provider request slot.")
+            val out=try{fetchMarket(symbol.uppercase(),accessKey,period,length)}catch(e:Exception){noteRequest();throw e}
+            noteRequest();credits+=out.second
+            return out.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
         }
-        val fetched=try{fetchMarket(symbol.uppercase(),accessKey,"1m",7200)}catch(e:Exception){noteRequest();throw e}
-        noteRequest()
-        val one=fetched.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
-        cache[cacheKey(symbol,"1m")]=Cache(System.currentTimeMillis(),one,fetched.second)
-        for(tf in listOf("5m","15m","30m","1h")){
-            val a=aggregate(one,minutes(tf));cache[cacheKey(symbol,tf)]=Cache(System.currentTimeMillis(),a,0)
-        }
-        return periods.associateWith{peek(symbol,it,220)?:emptyList()} to fetched.second
+
+        // Keep any usable existing history and only fetch missing seed families unless force=true.
+        var one=peek(symbol,"1m",12000).orEmpty()
+        if(force||one.size<600){one=request("1m",600);cache[cacheKey(symbol,"1m")]=Cache(System.currentTimeMillis(),one,0)}
+        if(one.isNotEmpty())cache[cacheKey(symbol,"5m")]=Cache(System.currentTimeMillis(),aggregate(one,5),0)
+
+        var fifteen=peek(symbol,"15m",12000).orEmpty()
+        if(force||fifteen.size<300){fifteen=request("15m",300);cache[cacheKey(symbol,"15m")]=Cache(System.currentTimeMillis(),fifteen,0)}
+        if(fifteen.isNotEmpty())cache[cacheKey(symbol,"30m")]=Cache(System.currentTimeMillis(),aggregate(fifteen,30,15),0)
+
+        var hour=peek(symbol,"1h",12000).orEmpty()
+        if(force||hour.size<300){hour=request("1h",300);cache[cacheKey(symbol,"1h")]=Cache(System.currentTimeMillis(),hour,0)}
+
+        val result=periods.associateWith{peek(symbol,it,220)?:emptyList()}
+        if(result.values.none{it.size>=60})throw IllegalStateException("No usable historical seed was returned for $symbol")
+        return result to credits
     }
 
     @Synchronized fun history(accessKey:String,symbol:String,period:String,length:Int=220,force:Boolean=false):Pair<List<Candle>,Int>{
         val hit=peek(symbol,period,length)
-        if(!hit.isNullOrEmpty()&&hit.size>=60&&!force)return hit to 0
+        if(!hit.isNullOrEmpty()&&hit.size>=100&&!force)return hit to 0
         val(all,credits)=bootstrap(accessKey,symbol,force)
         val out=all[normalizePeriod(period)]?.takeLast(length)?:emptyList()
         if(out.size<60)throw IllegalStateException("Not enough candle history for $symbol $period")
         return out to credits
     }
 
-    private fun aggregate(src:List<Candle>,mins:Int):List<Candle>{
-        if(mins<=1)return src
-        val sec=mins*60L;val out=mutableListOf<Candle>();var bucket=-1L;var o=0.0;var h=0.0;var l=0.0;var c=0.0;var v=0.0
+    private fun aggregate(src:List<Candle>,targetMins:Int,sourceMins:Int=1):List<Candle>{
+        if(targetMins<=sourceMins)return src
+        val sec=targetMins*60L
+        val out=mutableListOf<Candle>()
+        var bucket=-1L;var o=0.0;var h=0.0;var l=0.0;var c=0.0;var v=0.0
         fun flush(){if(bucket>=0)out+=Candle(bucket,o,h,l,c,v)}
-        for(x0 in src){val x=x0.copy(t=normalizeTs(x0.t));val b=(x.t/sec)*sec;if(b!=bucket){flush();bucket=b;o=x.o;h=x.h;l=x.l;c=x.c;v=x.v}else{h=max(h,x.h);l=kotlin.math.min(l,x.l);c=x.c;v+=x.v}}
+        for(x0 in src){
+            val x=x0.copy(t=normalizeTs(x0.t));val b=(x.t/sec)*sec
+            if(b!=bucket){flush();bucket=b;o=x.o;h=x.h;l=x.l;c=x.c;v=x.v}
+            else{h=max(h,x.h);l=kotlin.math.min(l,x.l);c=x.c;v+=x.v}
+        }
         flush();return out
     }
 
-    private fun trimWindow(){val now=System.currentTimeMillis();while(requestTimes.isNotEmpty()&&now-requestTimes.first()>=REQUEST_WINDOW_MS)requestTimes.removeFirst()}
+    private fun trimWindow(){
+        val now=System.currentTimeMillis()
+        while(requestTimes.isNotEmpty()&&now-requestTimes.first()>=REQUEST_WINDOW_MS)requestTimes.removeFirst()
+    }
     private fun canRequestNow():Boolean{trimWindow();return requestTimes.size<MAX_REQUESTS_PER_WINDOW}
     private fun noteRequest(){requestTimes.addLast(System.currentTimeMillis());trimWindow()}
 
     private fun fetchMarket(symbol:String,key:String,period:String,length:Int):Pair<List<Candle>,Int>{
-        return when(symbol){"XAUUSD"->fetch("forex",key,"XAUUSD",period,length,"commodity");else->fetch("crypto",key,"BINANCE:BTCUSDT",period,length,"crypto")}
+        return when(symbol){
+            "XAUUSD"->fetch("forex",key,"XAUUSD",period,length,"commodity")
+            else->fetch("crypto",key,"BINANCE:BTCUSDT",period,length,"crypto")
+        }
     }
 
     private fun fetch(group:String,key:String,symbol:String,period:String,length:Int,type:String):Pair<List<Candle>,Int>{
-        val p=normalizePeriod(period);val u="https://api-v4.fcsapi.com/$group/history?symbol=${enc(symbol)}&period=${enc(p)}&length=$length&is_chart=0&type=${enc(type)}&access_key=${enc(key)}"
-        val c=URL(u).openConnection() as HttpURLConnection;c.connectTimeout=12000;c.readTimeout=22000;c.requestMethod="GET"
-        val code=c.responseCode;val body=(if(code in 200..299)c.inputStream else c.errorStream).bufferedReader().use{it.readText()}
+        val p=normalizePeriod(period)
+        val u="https://api-v4.fcsapi.com/$group/history?symbol=${enc(symbol)}&period=${enc(p)}&length=$length&is_chart=0&type=${enc(type)}&access_key=${enc(key)}"
+        val c=URL(u).openConnection() as HttpURLConnection
+        c.connectTimeout=12000;c.readTimeout=22000;c.requestMethod="GET"
+        val code=c.responseCode
+        val body=(if(code in 200..299)c.inputStream else c.errorStream).bufferedReader().use{it.readText()}
         if(code !in 200..299)throw IllegalStateException("Market data HTTP $code")
-        val root=JSONObject(body);if(root.has("status")&&!root.optBoolean("status",true))throw IllegalStateException(root.optString("msg","Market data request failed"))
-        val credits=root.optJSONObject("info")?.optInt("credit_count",1)?:1;val response=root.opt("response")?:root.opt("data")?:root;val candles=mutableListOf<Candle>()
-        fun add(o:JSONObject,k:String=""){if(!o.has("o")||!o.has("c"))return;candles+=Candle(normalizeTs(o.optLong("t",k.toLongOrNull()?:0L)),o.optDouble("o"),o.optDouble("h"),o.optDouble("l"),o.optDouble("c"),o.optDouble("v",0.0))}
-        when(response){is JSONArray->for(i in 0 until response.length())response.optJSONObject(i)?.let{add(it)};is JSONObject->{val it=response.keys();while(it.hasNext()){val k=it.next();response.optJSONObject(k)?.let{add(it,k)}}}}
-        candles.sortBy{it.t};if(candles.size<60)throw IllegalStateException("Not enough live candle data for $symbol $period");return candles to credits
+        val root=JSONObject(body)
+        if(root.has("status")&&!root.optBoolean("status",true))throw IllegalStateException(root.optString("msg","Market data request failed"))
+        val credits=root.optJSONObject("info")?.optInt("credit_count",1)?:1
+        val response=root.opt("response")?:root.opt("data")?:root
+        val candles=mutableListOf<Candle>()
+        fun add(o:JSONObject,k:String=""){
+            if(!o.has("o")||!o.has("c"))return
+            candles+=Candle(
+                normalizeTs(o.optLong("t",k.toLongOrNull()?:0L)),
+                o.optDouble("o"),o.optDouble("h"),o.optDouble("l"),o.optDouble("c"),o.optDouble("v",0.0)
+            )
+        }
+        when(response){
+            is JSONArray->for(i in 0 until response.length())response.optJSONObject(i)?.let{add(it)}
+            is JSONObject->{val it=response.keys();while(it.hasNext()){val k=it.next();response.optJSONObject(k)?.let{add(it,k)}}}
+        }
+        candles.sortBy{it.t}
+        if(candles.size<60)throw IllegalStateException("Not enough candle history for $symbol $period")
+        return candles to credits
     }
 
-    private fun normalizePeriod(p:String)=when(p.trim().lowercase()){ "1m"->"1m";"5m"->"5m";"15m"->"15m";"30m"->"30m";"1h"->"1h";else->p.trim().lowercase() }
-    private fun minutes(tf:String)=when(tf.lowercase()){ "1m"->1;"5m"->5;"15m"->15;"30m"->30;"1h"->60;else->1 }
+    private fun normalizePeriod(p:String)=when(p.trim().lowercase()){
+        "1","1m"->"1m";"5","5m"->"5m";"15","15m"->"15m";"30","30m"->"30m";"60","1h"->"1h";else->p.trim().lowercase()
+    }
     private fun cacheKey(symbol:String,period:String)="${symbol.uppercase()}|${normalizePeriod(period)}"
     private fun normalizeTs(t:Long)=if(t>9_999_999_999L)t/1000L else t
     private fun enc(s:String)=URLEncoder.encode(s,"UTF-8")
