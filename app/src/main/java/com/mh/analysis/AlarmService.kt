@@ -25,10 +25,21 @@ class AlarmService:Service(),LiveSocketHub.Listener{
             if(c.c>0)thread(name="mh-js-live-tick"){processLifecycleTick(s,c)}
             return START_STICKY
         }
-        val k=prefs.getString("socket_api_key","")?.trim().orEmpty();if(k.isNotBlank())LiveSocketHub.start(this,k);return START_STICKY
+        val k=prefs.getString("socket_api_key","")?.trim().orEmpty()
+        if(k.isNotBlank())LiveSocketHub.start(this,k)
+        return START_STICKY
     }
     override fun onSocketState(state:String){updateService(state)}
-    override fun onLiveCandle(symbol:String,timeframe:String,candle:Candle){if(!running)return;try{if(timeframe=="1m")processLifecycleTick(symbol,candle);val key="$symbol|$timeframe",now=System.currentTimeMillis(),prior=lastEval[key]?:0L;if(now-prior>=5_000L){lastEval[key]=now;validatePendingOnTimeframe(symbol,timeframe)}}catch(_:Exception){}}
+    override fun onLiveCandle(symbol:String,timeframe:String,candle:Candle){
+        if(!running)return
+        try{
+            if(timeframe=="1m")processLifecycleTick(symbol,candle)
+            val key="$symbol|$timeframe"
+            val now=System.currentTimeMillis()
+            val prior=lastEval[key]?:0L
+            if(now-prior>=5_000L){lastEval[key]=now;validatePendingOnTimeframe(symbol,timeframe)}
+        }catch(_:Exception){}
+    }
     private fun processLifecycleTick(symbol:String,last:Candle){
         val oneMin=FcsClient.peek(symbol,"1m",220)
         if(oneMin!=null&&oneMin.size>=20&&AnalysisEngine.isHighVolatility(oneMin)){
@@ -38,10 +49,33 @@ class AlarmService:Service(),LiveSocketHub.Listener{
         }
         val armedBefore=AlarmStore.armed(this).filter{it.symbol==symbol}.associateBy{it.signalId}
         val events=SignalStore.processMinuteCandle(this,symbol,last)
-        events.forEach{e->val alarm=armedBefore[e.signal.id];when(e.state){"ACTIVE"->if(alarm!=null){val hit=alarm.copy(enabled=false,status="TRIGGERED",triggeredAt=System.currentTimeMillis(),armedAt=null);AlarmStore.update(this,hit);thread(name="mh-entry-alarm"){fireThreeCycles(hit)}};"EXPIRED"->alarm?.let{notifyState(it.copy(status="EXPIRED",enabled=false),"SETUP NO LONGER VALID before entry. It was moved to Records as expired.")};"WIN","LOSS"->notifyTrade(e.signal,e.state)}}
+        events.forEach{e->
+            val alarm=armedBefore[e.signal.id]
+            when(e.state){
+                "ACTIVE"->if(alarm!=null){val hit=alarm.copy(enabled=false,status="TRIGGERED",triggeredAt=System.currentTimeMillis(),armedAt=null);AlarmStore.update(this,hit);thread(name="mh-entry-alarm"){fireThreeCycles(hit)}}
+                "EXPIRED"->alarm?.let{notifyState(it.copy(status="EXPIRED",enabled=false),"SETUP NO LONGER VALID before entry. It was moved to Records as expired.")}
+                "WIN","LOSS"->notifyTrade(e.signal,e.state)
+            }
+        }
     }
-    private fun validatePendingOnTimeframe(symbol:String,timeframe:String){val pending=SignalStore.pendingSignals(this).filter{it.signal.symbol==symbol&&it.signal.timeframe==timeframe};if(pending.isEmpty())return;val candles=FcsClient.peek(symbol,timeframe,220)?:return;if(candles.size<60)return;val before=pending.associateBy{it.signal.id};SignalStore.evaluate(this,symbol,timeframe,candles);before.values.forEach{a->val after=SignalStore.loadActive(this,a.signal.symbol,a.signal.timeframe);if(after==null||after.signal.id!=a.signal.id){val reason=SignalStore.lifecycleReason(this,a.signal.id);if(reason.isNotBlank())notifySignalExpired(a.signal,reason)}}}
-    private fun fireThreeCycles(a:AlarmEntry){notifyState(a,"ENTRY REACHED at ${price(a.entry)} • ${a.symbol} ${a.timeframe}. Trade is ACTIVE.");val uri=RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)?:RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);for(i in 1..3){val ring=runCatching{RingtoneManager.getRingtone(this,uri)}.getOrNull();runCatching{ring?.play()};sleep(6_000);runCatching{ring?.stop()};if(i<3)sleep(10_000)};notifyState(a,"ALARM COMPLETED — entry was reached. Trade remains tracked until TP1 or SL.")}
+    private fun validatePendingOnTimeframe(symbol:String,timeframe:String){
+        val pending=SignalStore.pendingSignals(this).filter{it.signal.symbol==symbol&&it.signal.timeframe==timeframe}
+        if(pending.isEmpty())return
+        val candles=FcsClient.peek(symbol,timeframe,220)?:return
+        if(candles.size<60)return
+        val before=pending.associateBy{it.signal.id}
+        SignalStore.evaluate(this,symbol,timeframe,candles)
+        before.values.forEach{a->
+            val after=SignalStore.loadActive(this,a.signal.symbol,a.signal.timeframe)
+            if(after==null||after.signal.id!=a.signal.id){val reason=SignalStore.lifecycleReason(this,a.signal.id);if(reason.isNotBlank())notifySignalExpired(a.signal,reason)}
+        }
+    }
+    private fun fireThreeCycles(a:AlarmEntry){
+        notifyState(a,"ENTRY REACHED at ${price(a.entry)} • ${a.symbol} ${a.timeframe}. Trade is ACTIVE.")
+        val uri=RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)?:RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        for(i in 1..3){val ring=runCatching{RingtoneManager.getRingtone(this,uri)}.getOrNull();runCatching{ring?.play()};sleep(6_000);runCatching{ring?.stop()};if(i<3)sleep(10_000)}
+        notifyState(a,"ALARM COMPLETED — entry was reached. Trade remains tracked until TP1 or SL.")
+    }
     private fun notifyVolatility(symbol:String,expired:Int){val text=if(expired>0)"Abnormal volatility detected on $symbol. $expired pending setup(s) expired." else "Abnormal volatility detected on $symbol. New setups are blocked until structure stabilizes.";val n=builder("mh_alarm_alert_v24").setSmallIcon(android.R.drawable.stat_notify_error).setContentTitle("MH Volatility Alert • $symbol").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs((symbol+"vol").hashCode()),n)}
     private fun notifySignalExpired(s:Signal,reason:String){val text="${s.symbol} ${s.timeframe} • ${s.direction} pending setup expired. $reason";val n=builder("mh_alarm_alert_v24").setSmallIcon(android.R.drawable.ic_dialog_alert).setContentTitle("MH Setup Expired").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs((s.id+"expired").hashCode()),n)}
     private fun notifyTrade(s:Signal,state:String){val text="$state • ${s.symbol} ${s.timeframe} • Entry ${price(s.entry)} • TP1 ${price(s.tp1)} • SL ${price(s.sl)}";val n=builder("mh_alarm_alert_v24").setSmallIcon(android.R.drawable.ic_lock_idle_alarm).setContentTitle("MH Trade $state").setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(false).build();(getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(abs((s.id+state).hashCode()),n)}
