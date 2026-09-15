@@ -31,7 +31,6 @@ class AlarmService:Service(){
             if(key.isBlank()){updateService("Analysis key missing • background tracking paused");scheduleNext(60_000L);return}
             if(pending.isEmpty()&&open.isEmpty()){updateService("No pending/open trades • background monitor idle");stopSelf();return}
 
-            // Accepted setups are auto-armed. This also repairs pending setups created by older builds.
             pending.forEach{AlarmStore.ensureArmed(this@AlarmService,it.signal)}
 
             val symbols=(pending.map{it.signal.symbol}+open.map{it.signal.symbol}).distinct()
@@ -68,7 +67,6 @@ class AlarmService:Service(){
             handleEvents(SignalStore.processMinuteCandle(this,symbol,x),armedBefore)
             prefs.edit().putLong(cursorKey,toMillis(x.t)).apply()
         }
-        // Re-read the current minute every poll because its high/low can expand after the first read.
         handleEvents(SignalStore.processMinuteCandle(this,symbol,out.last()),armedBefore)
     }
 
@@ -78,7 +76,6 @@ class AlarmService:Service(){
                 "ACTIVE"->{armedBefore[e.signal.id]?.let{triggerEntryAlarmOnce(it,e.signal)}}
                 "EXPIRED"->notifySignalExpired(e.signal,SignalStore.lifecycleReason(this,e.signal.id).ifBlank{"Pending setup expired before entry."})
                 "WIN","LOSS"->{
-                    // Entry + TP/SL can occur in the same 1m candle. Ring entry alarm even if ACTIVE was never emitted separately.
                     armedBefore[e.signal.id]?.let{triggerEntryAlarmOnce(it,e.signal)}
                     notifyTrade(e.signal,e.state)
                 }
@@ -109,7 +106,7 @@ class AlarmService:Service(){
     private fun fireThreeCycles(a:AlarmEntry){
         val pm=getSystemService(POWER_SERVICE) as PowerManager
         val wl=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"MHAnalysis:EntryAlarm")
-        runCatching{wl.acquire(70_000L)}
+        runCatching{wl.acquire(80_000L)}
         try{
             notifyState(a,"ENTRY REACHED at ${price(a.entry)} • trade is ACTIVE.")
             val uri=RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)?:RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
@@ -118,8 +115,8 @@ class AlarmService:Service(){
                 val ring=runCatching{RingtoneManager.getRingtone(this,uri)}.getOrNull()
                 if(Build.VERSION.SDK_INT>=21)runCatching{ring?.audioAttributes=attrs}
                 runCatching{ring?.play()}
-                vibrate(6_000L)
-                sleep(6_000L)
+                vibrate(10_000L)
+                sleep(10_000L)
                 runCatching{ring?.stop()}
                 if(i<3)sleep(10_000L)
             }
