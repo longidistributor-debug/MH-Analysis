@@ -42,7 +42,7 @@ class MainActivity:Activity(){
         root.addView(txt("بِسْمِ ٱللَّٰهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ",21f,true).apply{gravity=Gravity.CENTER;textAlignment=View.TEXT_ALIGNMENT_CENTER;setPadding(0,dp(3),0,dp(14))},LinearLayout.LayoutParams(-1,-2))
         val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
         header.addView(TextView(this).apply{text="MS";gravity=Gravity.CENTER;textSize=22f;setTextColor(Color.WHITE);setTypeface(typeface,Typeface.BOLD);background=round(Color.BLACK,18f,Color.WHITE)},LinearLayout.LayoutParams(dp(64),dp(64)))
-        header.addView(LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0);addView(txt("MH ANALYSIS",26f,true));addView(txt("Live Market Structure Engine",11f,false,Color.LTGRAY));addView(txt("MS • v12 • LIVE ENGINE",10f,true));addView(txt("◉ WhatsApp  +92 343 4824609",11f,false,Color.LTGRAY))},LinearLayout.LayoutParams(0,-2,1f));root.addView(header)
+        header.addView(LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0);addView(txt("MH ANALYSIS",26f,true));addView(txt("Live Market Structure Engine",11f,false,Color.LTGRAY));addView(txt("MS • v14 • BEST SETUP",10f,true));addView(txt("◉ WhatsApp  +92 343 4824609",11f,false,Color.LTGRAY))},LinearLayout.LayoutParams(0,-2,1f));root.addView(header)
 
         val kc=card();keyStatus=txt("",12f,true,Color.LTGRAY);kc.addView(keyStatus);keyInput=input("Enter market data key","").apply{inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD};kc.addView(keyInput,LinearLayout.LayoutParams(-1,dp(52)).apply{topMargin=dp(8)});keyButton=Button(this).apply{setTextColor(Color.BLACK);background=round(Color.WHITE,12f);setOnClickListener{handleKeyButton()}};kc.addView(keyButton,LinearLayout.LayoutParams(-1,dp(50)).apply{topMargin=dp(10)});updateKeyUi();root.addView(kc,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(12)})
 
@@ -50,22 +50,22 @@ class MainActivity:Activity(){
         val row2=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};pairLabel=txt("$symbol • $period",13f,true);row2.addView(pairLabel,LinearLayout.LayoutParams(0,dp(48),1f));val periods=arrayOf("1m","5m","15m","30m","1h");if(period !in periods)period="15m";val sp=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,periods);setSelection(periods.indexOf(period).coerceAtLeast(0))};row2.addView(sp,LinearLayout.LayoutParams(dp(135),dp(48)));mc.addView(row2);root.addView(mc)
         sp.onItemSelectedListener=object:AdapterView.OnItemSelectedListener{override fun onItemSelected(p:AdapterView<*>?,v:View?,pos:Int,id:Long){val np=periods[pos];if(np==period)return;period=np;prefs.edit().putString("period",period).apply();selectionGeneration++;invalidateLoadedChart("SWITCHING TO $symbol • $period…");if(chartReady&&savedKey().isNotBlank())load(false,true)};override fun onNothingSelected(p:AdapterView<*>?){}}
 
-        root.addView(section("LIVE MARKET CHART"));val cc=card();chart=WebView(this).apply{settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK);webViewClient=object:WebViewClient(){override fun onPageFinished(v:WebView?,u:String?){chartReady=true;if(savedKey().isNotBlank())load(false,true)}};loadUrl("file:///android_asset/chart.html")};cc.addView(chart,LinearLayout.LayoutParams(-1,dp(540)));cc.addView(txt("Live refresh • independent timeframe candles • EMA/SMA • liquidity • FVG • order block • CHoCH/BOS • pressure/divergence • Entry/SL/TP",10f,false,Color.GRAY));root.addView(cc)
+        root.addView(section("LIVE MARKET CHART"));val cc=card();chart=WebView(this).apply{settings.javaScriptEnabled=true;settings.domStorageEnabled=true;setBackgroundColor(Color.BLACK);webViewClient=object:WebViewClient(){override fun onPageFinished(v:WebView?,u:String?){chartReady=true;if(savedKey().isNotBlank())load(false,true)}};loadUrl("file:///android_asset/chart.html")};cc.addView(chart,LinearLayout.LayoutParams(-1,dp(560)));root.addView(cc)
 
-        root.addView(section("SIGNAL CONTROL"));val ac=card();calls=txt("Calls: ${usage()}/500",11f,true,Color.LTGRAY);ac.addView(calls);val btns=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};btns.addView(actionButton("NEW ANALYZE",true){newAnalyze()},LinearLayout.LayoutParams(0,dp(54),1f).apply{rightMargin=dp(4)});btns.addView(actionButton("RECORDS",false){showRecords()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(2);rightMargin=dp(2)});btns.addView(actionButton("ALARM",false){alarmAndShow()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(4)});ac.addView(btns,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});status=txt("READY\nChart sync is automatic. NEW ANALYZE is manual only. Existing signals continue their live lifecycle in background.",12f,false).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)};ac.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});root.addView(ac)
+        root.addView(section("SIGNAL CONTROL"));val ac=card();calls=txt("Calls: ${usage()}/500",11f,true,Color.LTGRAY);ac.addView(calls);val btns=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};btns.addView(actionButton("NEW ANALYZE",true){newAnalyze()},LinearLayout.LayoutParams(0,dp(54),1f).apply{rightMargin=dp(4)});btns.addView(actionButton("RECORDS",false){showRecords()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(2);rightMargin=dp(2)});btns.addView(actionButton("ALARM",false){alarmAndShow()},LinearLayout.LayoutParams(0,dp(54),1f).apply{leftMargin=dp(4)});ac.addView(btns,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});status=txt("READY",12f,false).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)};ac.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});root.addView(ac)
 
-        root.addView(section("FLOATING / BACKGROUND"));val fc=card();fc.addView(txt("Background monitoring keeps pending/open signal state alive. Floating mode shows the same live chart and signal lifecycle over other apps.",10.5f,false,Color.LTGRAY));fc.addView(Button(this).apply{text="ENABLE MS LIVE FLOAT";setTextColor(Color.WHITE);background=round(Color.rgb(25,25,25),12f,Color.GRAY);setOnClickListener{enableFloat()}},LinearLayout.LayoutParams(-1,dp(52)).apply{topMargin=dp(8)});root.addView(fc)
+        root.addView(section("FLOATING / BACKGROUND"));val fc=card();fc.addView(Button(this).apply{text="ENABLE MS LIVE FLOAT";setTextColor(Color.WHITE);background=round(Color.rgb(25,25,25),12f,Color.GRAY);setOnClickListener{enableFloat()}},LinearLayout.LayoutParams(-1,dp(52)));root.addView(fc)
         return ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.BLACK);addView(root)}
     }
 
-    private fun invalidateLoadedChart(message:String){pairLabel.text="$symbol • $period";candles=emptyList();loadedSymbol="";loadedPeriod="";loadedAt=0L;if(::chart.isInitialized&&chartReady)chart.evaluateJavascript("clearChart();showMessage(${JSONObject.quote(message)})",null);if(::status.isInitialized)status.text="$message\nNo trade is generated by changing timeframe."}
+    private fun invalidateLoadedChart(message:String){pairLabel.text="$symbol • $period";candles=emptyList();loadedSymbol="";loadedPeriod="";loadedAt=0L;if(::chart.isInitialized&&chartReady)chart.evaluateJavascript("clearChart();showMessage(${JSONObject.quote(message)})",null);if(::status.isInitialized)status.text=message}
     private fun savedKey()=prefs.getString("api_key","")?.trim().orEmpty()
     private fun updateKeyUi(){val saved=savedKey().isNotBlank();if(saved&&!editingKey){keyInput.setText("");keyInput.visibility=View.GONE;keyStatus.text="● DATA KEY SAVED • AUTO-CONNECT";keyButton.text="UPDATE KEY"}else{keyInput.visibility=View.VISIBLE;keyInput.setText("");keyStatus.text=if(saved)"ENTER NEW KEY • CURRENT KEY STAYS ACTIVE UNTIL SAVE" else "DATA KEY REQUIRED • ENTER ONCE AND SAVE";keyButton.text=if(saved)"SAVE NEW KEY" else "SAVE KEY"}}
     private fun handleKeyButton(){val saved=savedKey().isNotBlank();if(saved&&!editingKey){editingKey=true;updateKeyUi();keyInput.requestFocus();return};val entered=keyInput.text.toString().trim();if(entered.isBlank()){Toast.makeText(this,"Enter a valid key",Toast.LENGTH_SHORT).show();return};prefs.edit().putString("api_key",entered).apply();keyInput.setText("");editingKey=false;updateKeyUi();startStateService();Toast.makeText(this,"Data key saved for this installation",Toast.LENGTH_SHORT).show();selectionGeneration++;if(chartReady)load(true,true)}
     private fun switchPair(s:String){if(symbol==s)return;symbol=s;prefs.edit().putString("symbol",s).apply();selectionGeneration++;invalidateLoadedChart("SWITCHING TO $symbol • $period…");if(savedKey().isNotBlank())load(false,true)}
 
     private fun load(force:Boolean,passive:Boolean=false,after:(()->Unit)?=null){
-        if(!chartReady)return;val k=savedKey();if(k.isBlank()){status.text="DATA KEY REQUIRED\nEnter it once and press SAVE KEY.";return}
+        if(!chartReady)return;val k=savedKey();if(k.isBlank()){status.text="DATA KEY REQUIRED";return}
         if(busy){queuedLoad=true;queuedForce=queuedForce||force;queuedPassive=passive;if(after!=null)queuedAfter=after;return}
         busy=true;val reqSymbol=symbol;val reqPeriod=period;val reqGeneration=selectionGeneration
         thread{try{val(data,credits)=FcsClient.history(k,reqSymbol,reqPeriod,220,force);val eval=SignalStore.evaluate(this,reqSymbol,reqPeriod,data);runOnUiThread{if(credits>0)addUsage(credits);calls.text="Calls: ${usage()}/500";val current=reqGeneration==selectionGeneration&&reqSymbol==symbol&&reqPeriod==period;if(current){candles=data;loadedSymbol=reqSymbol;loadedPeriod=reqPeriod;loadedAt=System.currentTimeMillis();render(data,reqSymbol,reqPeriod);pairLabel.text="$reqSymbol • $reqPeriod";if(!passive&&eval!=null&&eval.state in setOf("WIN","LOSS","EXPIRED"))status.text="${eval.state} • lifecycle updated" else showExisting();after?.invoke()};busy=false;drainQueuedLoad()}}catch(e:Exception){runOnUiThread{if(reqGeneration==selectionGeneration&&reqSymbol==symbol&&reqPeriod==period)status.text="MARKET SYNC • $reqSymbol $reqPeriod\n${e.message}";busy=false;drainQueuedLoad()}}}
@@ -76,18 +76,35 @@ class MainActivity:Activity(){
 
     private fun newAnalyze(){
         if(savedKey().isBlank()){Toast.makeText(this,"Save data key once first",Toast.LENGTH_SHORT).show();return};val have=candles.isNotEmpty()&&loadedSymbol==symbol&&loadedPeriod==period&&System.currentTimeMillis()-loadedAt<35_000
-        if(!have){status.text="REFRESHING $symbol • $period BEFORE ANALYSIS…";load(false,false){newAnalyze()};return};if(busy){queuedLoad=true;queuedPassive=false;queuedAfter={newAnalyze()};return}
-        SignalStore.evaluate(this,symbol,period,candles);val s=AnalysisEngine.analyze(symbol,period,candles)
-        if(s==null){status.text="NO NEW TRADE\n${AnalysisEngine.noSignalReason(symbol,period,candles)}\n\nPrevious signal state remains visible until a genuinely new setup replaces it.";showSignalOverlay(currentDisplayedSignal());return}
-        val duplicate=SignalStore.findDuplicate(this,s);if(duplicate!=null){status.text="NO NEW TRADE — SAME SETUP ALREADY ${duplicate.state}\nExisting ${duplicate.signal.direction} setup around ${price(duplicate.signal.entry)} remains tracked.";showSignalOverlay(duplicate);return}
+        if(!have){status.text="REFRESHING $symbol • $period…";load(false,false){newAnalyze()};return};if(busy){queuedLoad=true;queuedPassive=false;queuedAfter={newAnalyze()};return}
+        SignalStore.evaluate(this,symbol,period,candles)
+        val existing=currentDisplayedSignal()
+        val s=AnalysisEngine.analyze(symbol,period,candles)
+        if(s==null){
+            if(existing!=null&&existing.state in setOf("PENDING","ACTIVE")){
+                val es=existing.signal
+                status.text="EXISTING SETUP • ${es.timeframe} • ${existing.state}\n${es.direction} ${es.score}/100\nEntry ${price(es.entry)}   SL ${price(es.sl)}\nTP1 ${price(es.tp1)}   TP2 ${price(es.tp2)}\n\nNo stronger new setup has replaced this one yet."
+                showSignalOverlay(existing)
+            }else{
+                status.text="NO NEW SETUP\n${AnalysisEngine.noSignalReason(symbol,period,candles)}"
+                showSignalOverlay(existing)
+            }
+            return
+        }
+        val duplicate=SignalStore.findDuplicate(this,s)
+        if(duplicate!=null){
+            val ds=duplicate.signal
+            status.text="EXISTING SETUP • ${ds.timeframe} • ${duplicate.state}\n${ds.direction} ${ds.score}/100\nEntry ${price(ds.entry)}   SL ${price(ds.sl)}\nTP1 ${price(ds.tp1)}   TP2 ${price(ds.tp2)}\n\nThis remains the best matching setup; no materially new setup is confirmed yet."
+            showSignalOverlay(duplicate);return
+        }
         SignalStore.acceptCandidate(this,s);startStateService();showExisting();showSignalOverlay(SignalStore.loadActive(this,symbol,period))
     }
 
     private fun showExisting(){
-        if(!::status.isInitialized)return;val a=currentDisplayedSignal();if(a==null){status.text="NO CURRENT SETUP\n$symbol • $period\nPress NEW ANALYZE for a fresh graph-based assessment.";if(::chart.isInitialized&&chartReady)chart.evaluateJavascript("setSignal(null)",null);return};val s=a.signal
-        val life=when(a.state){"PENDING"->"PENDING — live background monitor is validating structure, volatility and entry.";"ACTIVE"->"TRIGGERED / ACTIVE — entry reached; no longer pending. Tracking TP1 / SL.";"WIN"->"CLOSED WIN — retained as latest state until a new setup replaces it.";"LOSS"->"CLOSED LOSS — retained as latest state until a new setup replaces it.";"EXPIRED"->"EXPIRED / NO LONGER VALID — not an active trade. Press NEW ANALYZE when you want a fresh setup.";else->a.state}
+        if(!::status.isInitialized)return;val a=currentDisplayedSignal();if(a==null){status.text="$symbol • $period\nREADY FOR ANALYSIS";if(::chart.isInitialized&&chartReady)chart.evaluateJavascript("setSignal(null)",null);return};val s=a.signal
+        val life=when(a.state){"PENDING"->"PENDING — waiting for entry while live structure remains valid.";"ACTIVE"->"TRIGGERED / ACTIVE — tracking TP1 / SL.";"WIN"->"CLOSED WIN";"LOSS"->"CLOSED LOSS";"EXPIRED"->"EXPIRED / NO LONGER VALID";else->a.state}
         val reason=SignalStore.lifecycleReason(this,s.id);val confirms=s.reasons.take(6).joinToString("\n")
-        status.text="${s.direction} • ${s.score}/100 • ${a.state}\n$life\nEntry ${price(s.entry)}   SL ${price(s.sl)}\nTP1 ${price(s.tp1)}   TP2 ${price(s.tp2)}\n\nWHY THIS TRADE\n${s.setupReason}\n\nCONFIRMATIONS\n$confirms\n\nBull ${s.bullScore} • Bear ${s.bearScore}\nEMA20 ${price(s.ema20)} • EMA50 ${price(s.ema50)}\nRSI14 ${String.format(Locale.US,"%.1f",s.rsi)} • MACD ${price(s.macd)} • ATR ${price(s.atr)}${if(reason.isNotBlank())"\n\nLIFECYCLE\n$reason" else ""}\n\nCreated ${time(s.createdAt)}"
+        status.text="${s.direction} • ${s.score}/100 • ${a.state}\n$life\nEntry ${price(s.entry)}   SL ${price(s.sl)}\nTP1 ${price(s.tp1)}   TP2 ${price(s.tp2)}\n\nWHY THIS TRADE\n${s.setupReason}\n\nCONFIRMATIONS\n$confirms\n${if(reason.isNotBlank())"\nLIFECYCLE\n$reason" else ""}"
     }
     private fun showSignalOverlay(a:ActiveSignal?){if(!::chart.isInitialized||!chartReady)return;if(a==null){chart.evaluateJavascript("setSignal(null)",null);return};val s=a.signal;val j=JSONObject().put("entry",s.entry).put("sl",s.sl).put("tp1",s.tp1).put("tp2",s.tp2).put("state",a.state).put("fvgType",s.fvgType).put("fvgLow",s.fvgLow).put("fvgHigh",s.fvgHigh);chart.evaluateJavascript("setSignal(${JSONObject.quote(j.toString())})",null)}
 
