@@ -20,11 +20,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-      - run: python3 scripts/patch_v28.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v28.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v29.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v28.apk
+          path: MH-Analysis-v29.apk
           if-no-files-found: error
