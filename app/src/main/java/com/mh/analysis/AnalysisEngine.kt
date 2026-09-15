@@ -13,61 +13,74 @@ object AnalysisEngine {
     fun analyze(symbol:String,timeframe:String,c:List<Candle>):Signal?{
         if(c.size<100)return null
         if(isHighVolatility(c))return null
+
         val close=c.map{it.c};val last=c.last();val prev=c[c.lastIndex-1]
         val e20=ema(close,20).last();val e50=ema(close,50).last();val e150=ema(close,min(150,c.size-1)).last()
         val s20=sma(close,20);val s50=sma(close,50);val r=rsi(close,14);val a=atr(c,14).coerceAtLeast(1e-9)
         val macd=ema(close,12).last()-ema(close,26).last();val macdPrev=ema(close.dropLast(1),12).last()-ema(close.dropLast(1),26).last()
         val recent=c.takeLast(60);val local=c.takeLast(18).dropLast(1);val prior=c.takeLast(42).dropLast(4)
+        val shortPrior=c.takeLast(16).dropLast(2)
         val swingHigh=recent.dropLast(2).maxOf{it.h};val swingLow=recent.dropLast(2).minOf{it.l}
         val localHigh=local.maxOf{it.h};val localLow=local.minOf{it.l};val priorHigh=prior.maxOf{it.h};val priorLow=prior.minOf{it.l}
+        val shortHigh=shortPrior.maxOf{it.h};val shortLow=shortPrior.minOf{it.l}
 
         val trendBull=e20>e50&&s20>s50&&last.c>e150
         val trendBear=e20<e50&&s20<s50&&last.c<e150
+        val trendSlopeBull=e20>ema(close.dropLast(3),20).last()&&e50>=ema(close.dropLast(4),50).last()
+        val trendSlopeBear=e20<ema(close.dropLast(3),20).last()&&e50<=ema(close.dropLast(4),50).last()
         val bosBull=last.c>priorHigh+a*.05;val bosBear=last.c<priorLow-a*.05
+        val shortBosBull=last.c>shortHigh+a*.03;val shortBosBear=last.c<shortLow-a*.03
         val sweepBull=last.l<priorLow&&last.c>priorLow;val sweepBear=last.h>priorHigh&&last.c<priorHigh
         val stopHuntBull=sweepBull&&(last.c-last.l)>(last.h-last.l)*.55
         val stopHuntBear=sweepBear&&(last.h-last.c)>(last.h-last.l)*.55
-        val fakeBreakBull=last.l<priorLow-a*.08&&last.c>priorLow&&last.c>last.o
-        val fakeBreakBear=last.h>priorHigh+a*.08&&last.c<priorHigh&&last.c<last.o
-        val retestBull=prev.c>priorHigh&&last.l<=priorHigh+a*.18&&last.c>priorHigh
-        val retestBear=prev.c<priorLow&&last.h>=priorLow-a*.18&&last.c<priorLow
+        val fakeBreakBull=last.l<priorLow-a*.06&&last.c>priorLow&&last.c>last.o
+        val fakeBreakBear=last.h>priorHigh+a*.06&&last.c<priorHigh&&last.c<last.o
+        val retestBull=(prev.c>shortHigh||prev.c>priorHigh)&&last.l<=max(shortHigh,priorHigh)+a*.18&&last.c>max(shortHigh,priorHigh)-a*.05
+        val retestBear=(prev.c<shortLow||prev.c<priorLow)&&last.h>=min(shortLow,priorLow)-a*.18&&last.c<min(shortLow,priorLow)+a*.05
+
         val before=c.takeLast(34).dropLast(3)
         val downSeq=before.takeLast(9).zipWithNext().count{it.second.c<it.first.c}>=5
         val upSeq=before.takeLast(9).zipWithNext().count{it.second.c>it.first.c}>=5
         val chochBull=downSeq&&last.c>before.takeLast(10).maxOf{it.h}
         val chochBear=upSeq&&last.c<before.takeLast(10).minOf{it.l}
+
         val range=(last.h-last.l).coerceAtLeast(1e-9);val body=abs(last.c-last.o)
-        val pressureBull=last.c>last.o&&body/range>=.52&&last.c>=last.h-range*.22
-        val pressureBear=last.c<last.o&&body/range>=.52&&last.c<=last.l+range*.22
-        val displacementBull=last.c-last.o>a*.45&&pressureBull
-        val displacementBear=last.o-last.c>a*.45&&pressureBear
-        val nearSupport=abs(last.c-swingLow)<=a*1.15;val nearResistance=abs(last.c-swingHigh)<=a*1.15
+        val pressureBull=last.c>last.o&&body/range>=.50&&last.c>=last.h-range*.24
+        val pressureBear=last.c<last.o&&body/range>=.50&&last.c<=last.l+range*.24
+        val displacementBull=last.c-last.o>a*.42&&pressureBull
+        val displacementBear=last.o-last.c>a*.42&&pressureBear
+        val momentumBull=r>=54&&macd>=0&&macd>=macdPrev
+        val momentumBear=r<=46&&macd<=0&&macd<=macdPrev
+        val nearSupport=abs(last.c-localLow)<=a*1.10||abs(last.c-swingLow)<=a*1.25
+        val nearResistance=abs(last.c-localHigh)<=a*1.10||abs(last.c-swingHigh)<=a*1.25
         val rsiBullDiv=bullishRsiDivergence(c);val rsiBearDiv=bearishRsiDivergence(c)
-        val pullbackBull=c.takeLast(8).dropLast(1).any{it.l<=e20+a*.30&&it.c>=e20-a*.15}
-        val pullbackBear=c.takeLast(8).dropLast(1).any{it.h>=e20-a*.30&&it.c<=e20+a*.15}
+        val pullbackBull=c.takeLast(10).dropLast(1).any{it.l<=e20+a*.35&&it.c>=e50-a*.15}
+        val pullbackBear=c.takeLast(10).dropLast(1).any{it.h>=e20-a*.35&&it.c<=e50+a*.15}
 
         var fvgType:String?=null;var fvgLow:Double?=null;var fvgHigh:Double?=null
-        val fw=c.takeLast(28)
+        val fw=c.takeLast(30)
         for(i in 2 until fw.size){
             if(fw[i].l>fw[i-2].h){fvgType="BULLISH";fvgLow=fw[i-2].h;fvgHigh=fw[i].l}
             if(fw[i].h<fw[i-2].l){fvgType="BEARISH";fvgLow=fw[i].h;fvgHigh=fw[i-2].l}
         }
         val fvgBull=fvgType=="BULLISH";val fvgBear=fvgType=="BEARISH"
-        val bullOb=c.takeLast(12).dropLast(1).lastOrNull{it.c<it.o};val bearOb=c.takeLast(12).dropLast(1).lastOrNull{it.c>it.o}
+        val bullOb=c.takeLast(14).dropLast(1).lastOrNull{it.c<it.o};val bearOb=c.takeLast(14).dropLast(1).lastOrNull{it.c>it.o}
         val bullObMid=bullOb?.let{(it.o+it.c)/2};val bearObMid=bearOb?.let{(it.o+it.c)/2}
 
         var bull=0;var bear=0;val br=mutableListOf<Pair<Int,String>>();val sr=mutableListOf<Pair<Int,String>>()
         fun b(p:Int,x:String){bull+=p;br+=p to x};fun s(p:Int,x:String){bear+=p;sr+=p to x}
-        if(e20>e50)b(9,"EMA20 > EMA50")else s(9,"EMA20 < EMA50")
-        if(s20>s50)b(7,"SMA20 > SMA50")else s(7,"SMA20 < SMA50")
+        if(e20>e50)b(9,"EMA20 above EMA50")else s(9,"EMA20 below EMA50")
+        if(s20>s50)b(7,"SMA20 above SMA50")else s(7,"SMA20 below SMA50")
         if(last.c>e150)b(5,"Price above EMA150")else s(5,"Price below EMA150")
+        if(trendSlopeBull)b(5,"EMA trend slope rising")
+        if(trendSlopeBear)s(5,"EMA trend slope falling")
         if(r>=54)b(6,"RSI bullish ${one(r)}")else if(r<=46)s(6,"RSI bearish ${one(r)}")
         if(rsiBullDiv)b(15,"Bullish RSI divergence")
         if(rsiBearDiv)s(15,"Bearish RSI divergence")
         if(macd>0)b(5,"MACD above zero")else s(5,"MACD below zero")
         if(macd>macdPrev)b(5,"MACD pressure rising")else s(5,"MACD pressure falling")
-        if(bosBull)b(16,"Bullish BOS / breakout")
-        if(bosBear)s(16,"Bearish BOS / breakout")
+        if(bosBull||shortBosBull)b(16,"Bullish BOS / breakout")
+        if(bosBear||shortBosBear)s(16,"Bearish BOS / breakout")
         if(retestBull)b(18,"Bullish breakout retest held")
         if(retestBear)s(18,"Bearish breakout retest held")
         if(stopHuntBull)b(20,"Sell-side liquidity / SL hunt reclaimed")
@@ -76,58 +89,72 @@ object AnalysisEngine {
         if(fakeBreakBear)s(18,"Bullish break failed — bearish fakeout")
         if(chochBull)b(16,"Bullish CHoCH")
         if(chochBear)s(16,"Bearish CHoCH")
-        if(fvgBull)b(8,"Bullish FVG")
-        if(fvgBear)s(8,"Bearish FVG")
+        if(fvgBull)b(8,"Bullish FVG context")
+        if(fvgBear)s(8,"Bearish FVG context")
         if(bullObMid!=null)b(5,"Bullish order-block context")
         if(bearObMid!=null)s(5,"Bearish order-block context")
         if(displacementBull)b(10,"Bullish displacement / pressure")
         if(displacementBear)s(10,"Bearish displacement / pressure")
-        if(pullbackBull)b(7,"Recent EMA20 pullback held")
-        if(pullbackBear)s(7,"Recent EMA20 rejection held")
-        if(nearSupport)b(6,"Near structural support")
-        if(nearResistance)s(6,"Near structural resistance")
+        if(pullbackBull)b(8,"Recent EMA pullback held")
+        if(pullbackBear)s(8,"Recent EMA rejection held")
+        if(nearSupport)b(5,"Near structural support")
+        if(nearResistance)s(5,"Near structural resistance")
 
-        val bullLiquidityReversal=(stopHuntBull||fakeBreakBull)&&(chochBull||rsiBullDiv||pressureBull)
-        val bearLiquidityReversal=(stopHuntBear||fakeBreakBear)&&(chochBear||rsiBearDiv||pressureBear)
-        val bullBreakoutRetest=retestBull&&(trendBull||pressureBull||fvgBull)
-        val bearBreakoutRetest=retestBear&&(trendBear||pressureBear||fvgBear)
-        val bullContinuation=trendBull&&(bosBull||displacementBull||pressureBull||macd>macdPrev||pullbackBull)&&(fvgBull||bullObMid!=null||pullbackBull||nearSupport)
-        val bearContinuation=trendBear&&(bosBear||displacementBear||pressureBear||macd<macdPrev||pullbackBear)&&(fvgBear||bearObMid!=null||pullbackBear||nearResistance)
+        val bullLiquidityReversal=(stopHuntBull||fakeBreakBull)&&(chochBull||rsiBullDiv||pressureBull||momentumBull)
+        val bearLiquidityReversal=(stopHuntBear||fakeBreakBear)&&(chochBear||rsiBearDiv||pressureBear||momentumBear)
+        val bullBreakoutRetest=retestBull&&(trendBull||momentumBull||fvgBull)
+        val bearBreakoutRetest=retestBear&&(trendBear||momentumBear||fvgBear)
+        val bullContinuation=trendBull&&trendSlopeBull&&momentumBull&&(pullbackBull||fvgBull||bullObMid!=null||shortBosBull||pressureBull)
+        val bearContinuation=trendBear&&trendSlopeBear&&momentumBear&&(pullbackBear||fvgBear||bearObMid!=null||shortBosBear||pressureBear)
         val bullChoch=chochBull&&(stopHuntBull||rsiBullDiv||displacementBull||pressureBull)
         val bearChoch=chochBear&&(stopHuntBear||rsiBearDiv||displacementBear||pressureBear)
+        val bullBreakoutMomentum=(bosBull||shortBosBull)&&trendSlopeBull&&(momentumBull||displacementBull)
+        val bearBreakoutMomentum=(bosBear||shortBosBear)&&trendSlopeBear&&(momentumBear||displacementBear)
 
-        val bullFamily=listOf(bullLiquidityReversal,bullBreakoutRetest,bullContinuation,bullChoch).count{it}
-        val bearFamily=listOf(bearLiquidityReversal,bearBreakoutRetest,bearContinuation,bearChoch).count{it}
+        val bullFamily=listOf(bullLiquidityReversal,bullBreakoutRetest,bullContinuation,bullChoch,bullBreakoutMomentum).count{it}
+        val bearFamily=listOf(bearLiquidityReversal,bearBreakoutRetest,bearContinuation,bearChoch,bearBreakoutMomentum).count{it}
         val dir=if(bull>=bear)"BUY" else "SELL";val win=max(bull,bear);val lose=min(bull,bear);val sep=win-lose
         val family=if(dir=="BUY")bullFamily else bearFamily
-        if(family<1||win<44||sep<7)return null
+        if(family<1||win<48||sep<8)return null
 
         val matchingFvg=(dir=="BUY"&&fvgBull)||(dir=="SELL"&&fvgBear)
         val fvgMid=if(matchingFvg&&fvgLow!=null&&fvgHigh!=null)(fvgLow!!+fvgHigh!!)/2 else null
         val obMid=if(dir=="BUY")bullObMid else bearObMid
+        val impulse=c.takeLast(24)
+        val impulseHigh=impulse.maxOf{it.h};val impulseLow=impulse.minOf{it.l};val impulseRange=(impulseHigh-impulseLow).coerceAtLeast(a)
+        val retrace382=if(dir=="BUY")impulseHigh-impulseRange*.382 else impulseLow+impulseRange*.382
+        val retrace50=if(dir=="BUY")impulseHigh-impulseRange*.50 else impulseLow+impulseRange*.50
+
         val candidates=mutableListOf<Pair<String,Double>>()
         if(fvgMid!=null)candidates+="FVG midpoint" to fvgMid
         if(obMid!=null)candidates+="order-block midpoint" to obMid
         if(dir=="BUY"&&e20<last.c)candidates+="EMA20 pullback" to e20
         if(dir=="SELL"&&e20>last.c)candidates+="EMA20 pullback" to e20
-        if(dir=="BUY"&&retestBull)candidates+="breakout retest" to priorHigh
-        if(dir=="SELL"&&retestBear)candidates+="breakout retest" to priorLow
+        if(dir=="BUY"&&e50<last.c)candidates+="EMA50 structure pullback" to e50
+        if(dir=="SELL"&&e50>last.c)candidates+="EMA50 structure pullback" to e50
+        if(dir=="BUY"&&retestBull)candidates+="breakout retest" to max(shortHigh,priorHigh)
+        if(dir=="SELL"&&retestBear)candidates+="breakout retest" to min(shortLow,priorLow)
+        if((dir=="BUY"&&trendBull)||(dir=="SELL"&&trendBear)){
+            candidates+="38.2% impulse retracement" to retrace382
+            candidates+="50% impulse retracement" to retrace50
+        }
+
         val validEntries=candidates.filter{(_,v)->
             val dist=abs(last.c-v)/a
-            val directional=if(dir=="BUY")v<last.c+a*.10 else v>last.c-a*.10
-            val notAlreadyPassed=if(dir=="BUY")v>last.l-a*.25 else v<last.h+a*.25
-            directional&&notAlreadyPassed&&dist<=2.0
+            val untouched=if(dir=="BUY")v<=last.l-a*.03 else v>=last.h+a*.03
+            val directional=if(dir=="BUY")v<last.c else v>last.c
+            directional&&untouched&&dist in .10..2.20
         }.sortedBy{abs(last.c-it.second)}
         if(validEntries.isEmpty())return null
         val entrySource=validEntries.first().first;val entry=validEntries.first().second
 
         val tf=tfMinutes(timeframe)
-        val maxRiskAtr=when{tf<=1->.80;tf<=5->.95;tf<=15->1.08;tf<=30->1.22;else->1.45}
+        val maxRiskAtr=when{tf<=1->.80;tf<=5->.95;tf<=15->1.08;tf<=30->1.22;else->1.38}
         val structureRisk=if(dir=="BUY")entry-(localLow-a*.08)else(localHigh+a*.08)-entry
         val risk=max(a*.62,min(max(structureRisk,0.0),a*maxRiskAtr)).coerceAtMost(a*maxRiskAtr)
         val sl=if(dir=="BUY")entry-risk else entry+risk
-        val tp1Atr=when{tf<=1->.72;tf<=5->.90;tf<=15->1.05;tf<=30->1.18;else->1.48}
-        val tp2Atr=when{tf<=1->1.02;tf<=5->1.25;tf<=15->1.50;tf<=30->1.70;else->2.10}
+        val tp1Atr=when{tf<=1->.72;tf<=5->.90;tf<=15->1.05;tf<=30->1.18;else->1.35}
+        val tp2Atr=when{tf<=1->1.02;tf<=5->1.25;tf<=15->1.50;tf<=30->1.70;else->1.95}
         val rawTp1=if(dir=="BUY")entry+a*tp1Atr else entry-a*tp1Atr;val rawTp2=if(dir=="BUY")entry+a*tp2Atr else entry-a*tp2Atr
         val nearest=if(dir=="BUY")listOf(localHigh,priorHigh,swingHigh).filter{it>entry+a*.20}.minOrNull() else listOf(localLow,priorLow,swingLow).filter{it<entry-a*.20}.maxOrNull()
         val tp1=if(nearest!=null){if(dir=="BUY")min(rawTp1,nearest)else max(rawTp1,nearest)}else rawTp1
@@ -140,12 +167,15 @@ object AnalysisEngine {
             dir=="SELL"&&bearBreakoutRetest->"breakout + retest continuation"
             dir=="BUY"&&bullChoch->"CHoCH reversal"
             dir=="SELL"&&bearChoch->"CHoCH reversal"
-            else->"trend continuation / pullback"
+            dir=="BUY"&&bullBreakoutMomentum->"breakout momentum continuation"
+            dir=="SELL"&&bearBreakoutMomentum->"breakout momentum continuation"
+            else->"established trend pullback"
         }
-        val score=(58+sep+(family*6)).coerceIn(58,96)
+        val score=(62+sep+(family*5)).coerceIn(62,96)
         val reasons=(if(dir=="BUY")br else sr).sortedByDescending{it.first}.take(10).map{"${it.second} (+${it.first})"}
-        val validityReason="No candle-count expiry. The setup remains pending only while its live structure, momentum, liquidity context and volatility remain valid. It expires when that thesis breaks or abnormal volatility invalidates the pending entry."
-        val setupReason="$dir $familyName selected. Evidence score $win vs $lose; entry uses $entrySource at ${fmt(entry)}. One complete setup family with supporting confluence is enough; a fresh BOS candle is not mandatory for an already-established continuation trend."
+        val strongest=reasons.take(4).joinToString("; ")
+        val validityReason="No fixed candle-count expiry. Pending remains valid only while live trend, momentum, liquidity and structure support the original thesis; abnormal volatility or structural failure expires it immediately."
+        val setupReason="$dir $familyName. Graph evidence: $strongest. Evidence balance $win vs $lose. Pending entry is $entrySource at ${fmt(entry)}, outside the signal candle so it cannot trigger instantly."
         val slReason="SL is behind local invalidation structure and capped by ${two(maxRiskAtr)} ATR for $timeframe."
         val tp1Reason="TP1 uses nearby structure and a ${two(tp1Atr)} ATR objective."
         val tp2Reason="TP2 uses an extended ${two(tp2Atr)} ATR objective."
@@ -165,41 +195,43 @@ object AnalysisEngine {
         val p=c.takeLast(18).dropLast(1);val hi=p.maxOf{it.h};val lo=p.minOf{it.l};var opposite=0
         if(s.direction=="BUY"){
             if(last.c<s.sl)return SetupCheck(false,"BUY invalidated: price closed through structural SL.")
-            if(e20<e50)opposite++;if(rr<44)opposite++;if(m<0)opposite++;if(last.c<lo)opposite+=2
+            if(e20<e50)opposite++;if(rr<43)opposite++;if(m<0)opposite++;if(last.c<lo)opposite+=2
             if(s.fvgType=="BULLISH"&&s.fvgLow!=null&&last.c<s.fvgLow)opposite++
         }else{
             if(last.c>s.sl)return SetupCheck(false,"SELL invalidated: price closed through structural SL.")
-            if(e20>e50)opposite++;if(rr>56)opposite++;if(m>0)opposite++;if(last.c>hi)opposite+=2
+            if(e20>e50)opposite++;if(rr>57)opposite++;if(m>0)opposite++;if(last.c>hi)opposite+=2
             if(s.fvgType=="BEARISH"&&s.fvgHigh!=null&&last.c>s.fvgHigh)opposite++
         }
-        return if(opposite>=3)SetupCheck(false,"Original setup is no longer valid: live trend/momentum/structure confirmation changed before entry.") else SetupCheck(true,"Live setup thesis still valid.")
+        return if(opposite>=3)SetupCheck(false,"Original setup is no longer valid: live trend/momentum/structure changed before entry.") else SetupCheck(true,"Live setup thesis remains valid.")
     }
 
     fun isHighVolatility(c:List<Candle>):Boolean{
         if(c.size<25)return false
         val a=atr(c.dropLast(1),14).coerceAtLeast(1e-9);val last=c.last();val tr=max(last.h-last.l,max(abs(last.h-c[c.lastIndex-1].c),abs(last.l-c[c.lastIndex-1].c)))
         val recent=c.takeLast(20).dropLast(1).map{it.h-it.l}.sorted();val med=recent[recent.size/2].coerceAtLeast(1e-9)
-        return tr>a*2.4||tr>med*3.0
+        return tr>a*2.5||tr>med*3.1
     }
 
     fun noSignalReason(symbol:String,timeframe:String,c:List<Candle>):String{
-        if(c.size<100)return "NO VALID TRADE: not enough history for $symbol $timeframe."
-        if(isHighVolatility(c))return "NO VALID TRADE / WAIT\nAbnormal volatility is active. New entries are blocked until market structure stabilizes."
-        val close=c.map{it.c};val e20=ema(close,20).last();val e50=ema(close,50).last();val rr=rsi(close,14)
-        return "NO VALID TRADE / WAIT\nNo strong setup family is complete on $symbol $timeframe yet. EMA20 ${if(e20>e50)"above" else "below"} EMA50, RSI ${one(rr)}. The engine now accepts established trend continuation/pullback setups as well as liquidity reversal, breakout/retest and CHoCH — but it still will not manufacture a trade from indicators alone."
+        if(c.size<100)return "NO VALID TRADE: not enough live history for $symbol $timeframe."
+        if(isHighVolatility(c))return "NO VALID TRADE / WAIT\nAbnormal volatility is active. New entries are blocked until the candle range and structure normalize."
+        val close=c.map{it.c};val e20=ema(close,20).last();val e50=ema(close,50).last();val e150=ema(close,min(150,c.size-1)).last();val rr=rsi(close,14);val macd=ema(close,12).last()-ema(close,26).last();val a=atr(c,14).coerceAtLeast(1e-9);val last=c.last()
+        val bullTrend=e20>e50&&last.c>e150;val bearTrend=e20<e50&&last.c<e150
+        val bias=when{bullTrend->"bullish trend";bearTrend->"bearish trend";else->"mixed/ranging structure"}
+        val momentum=when{rr>=56&&macd>0->"bullish momentum";rr<=44&&macd<0->"bearish momentum";else->"momentum is not decisive"}
+        val stretched=abs(last.c-e20)/a>1.8
+        val blocker=when{
+            stretched->"Price is stretched away from its mean; the engine is waiting for a safer retracement instead of chasing."
+            bullTrend&&rr<52->"Trend is bullish but momentum confirmation is weak."
+            bearTrend&&rr>48->"Trend is bearish but momentum confirmation is weak."
+            else->"No complete liquidity reversal, breakout/retest, CHoCH, or established trend-pullback family has a fresh untouched entry zone yet."
+        }
+        return "NO VALID TRADE / WAIT\n$symbol $timeframe currently shows $bias with $momentum. EMA20 ${fmt(e20)}, EMA50 ${fmt(e50)}, RSI ${one(rr)}. $blocker"
     }
 
-    private fun bullishRsiDivergence(c:List<Candle>):Boolean{
-        if(c.size<35)return false;val a=c.takeLast(30);val first=a.take(15);val second=a.takeLast(15)
-        val l1=first.minOf{it.l};val l2=second.minOf{it.l};val r1=rsi(first.map{it.c},7);val r2=rsi(second.map{it.c},7)
-        return l2<l1&&r2>r1+3
-    }
-    private fun bearishRsiDivergence(c:List<Candle>):Boolean{
-        if(c.size<35)return false;val a=c.takeLast(30);val first=a.take(15);val second=a.takeLast(15)
-        val h1=first.maxOf{it.h};val h2=second.maxOf{it.h};val r1=rsi(first.map{it.c},7);val r2=rsi(second.map{it.c},7)
-        return h2>h1&&r2<r1-3
-    }
-    private fun tfMinutes(tf:String)=when(tf.lowercase(Locale.US)){"1m"->1;"3m"->3;"5m"->5;"10m"->10;"15m"->15;"30m"->30;"1h"->60;"2h"->120;"4h"->240;"6h"->360;"12h"->720;"1d","1day"->1440;else->15}
+    private fun bullishRsiDivergence(c:List<Candle>):Boolean{if(c.size<35)return false;val a=c.takeLast(30);val first=a.take(15);val second=a.takeLast(15);val l1=first.minOf{it.l};val l2=second.minOf{it.l};val r1=rsi(first.map{it.c},7);val r2=rsi(second.map{it.c},7);return l2<l1&&r2>r1+3}
+    private fun bearishRsiDivergence(c:List<Candle>):Boolean{if(c.size<35)return false;val a=c.takeLast(30);val first=a.take(15);val second=a.takeLast(15);val h1=first.maxOf{it.h};val h2=second.maxOf{it.h};val r1=rsi(first.map{it.c},7);val r2=rsi(second.map{it.c},7);return h2>h1&&r2<r1-3}
+    private fun tfMinutes(tf:String)=when(tf.lowercase(Locale.US)){"1m"->1;"5m"->5;"15m"->15;"30m"->30;"1h"->60;else->15}
     private fun one(v:Double)=String.format(Locale.US,"%.1f",v);private fun two(v:Double)=String.format(Locale.US,"%.2f",v)
     private fun fmt(v:Double?)=if(v==null)"-" else if(abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)
     private fun sma(v:List<Double>,p:Int)=v.takeLast(min(p,v.size)).average()
