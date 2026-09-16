@@ -29,18 +29,28 @@ p=Path('app/src/main/java/com/mh/analysis/MainActivityV29.kt')
 s=p.read_text()
 s=s.replace('class MainActivityV29:Activity(),LiveSocketHub.Listener{','class MainActivityV29:Activity(){',1)
 
-# Remove v45 socket listener callback and lifecycle listener snippets.
+# Remove v45 live callback if present.
 s=re.sub(r'''\n    override fun onLiveCandle\(symbol:String,timeframe:String,candle:Candle\)\{.*?\n    \}\n''','\n',s,count=1,flags=re.S)
+
+# Remove every listener/start line injected by the Lightweight-chart layer.
+clean=[]
+for line in s.splitlines():
+    if 'LiveSocketHub.addListener(this)' in line: continue
+    if 'LiveSocketHub.removeListener(this)' in line: continue
+    if 'val liveKey=prefs.getString("socket_api_key"' in line: continue
+    if 'LiveSocketHub.start(this,liveKey)' in line: continue
+    clean.append(line)
+s='\n'.join(clean)+'\n'
+# Also clean compact same-line forms if any older patch produced them.
 s=s.replace('LiveSocketHub.addListener(this);','')
 s=s.replace('LiveSocketHub.removeListener(this);','')
-s=re.sub(r'''\n?\s*val liveKey=prefs\.getString\("socket_api_key",""\)\?\.trim\(\)\.orEmpty\(\)\.ifBlank\{savedHistoryKey\(\)\}\n\s*if\(liveKey\.isNotBlank\(\)\)LiveSocketHub\.start\(this,liveKey\)''','',s)
 
-# v45 used unpkg as the page base because it was Lightweight Charts. Restore TV.
+# Restore TradingView base URL instead of Lightweight Charts CDN base.
 s=s.replace('loadDataWithBaseURL("https://unpkg.com/",html,"text/html","UTF-8",null)',
             'loadDataWithBaseURL("https://s3.tradingview.com/",html,"text/html","UTF-8",null)')
 
-# Stop feeding FCS candles into the visible chart. Only analysis levels/snapshot
-# are sent after ANALYZE; TradingView itself owns live price/candle movement.
+# Stop feeding FCS candles into the visible chart. Only app-calculated levels and
+# the outside snapshot update after ANALYZE; TradingView owns live candle motion.
 start=s.index('    private fun pushChartCandles(data:List<Candle>){')
 end=s.index('\n    private fun updateSnapshot(data:List<Candle>?=null){',start)
 new_guides='''    private fun pushChartLevels(data:List<Candle>){
@@ -66,6 +76,7 @@ new_guides='''    private fun pushChartLevels(data:List<Candle>){
 '''
 s=s[:start]+new_guides+s[end:]
 
+# Every completed ANALYZE becomes the only current analysis for this symbol.
 needle='''    private fun performAnalysis(){
         if(candles.size<60){status.text="NOT ENOUGH MARKET HISTORY FOR RELIABLE ANALYSIS";return}
         val candidate=AnalysisEngine.analyze(symbol,period,candles)'''
@@ -75,7 +86,6 @@ replacement='''    private fun performAnalysis(){
         val candidate=AnalysisEngine.analyze(symbol,period,candles)'''
 if needle not in s: raise SystemExit('v47 performAnalysis anchor not found')
 s=s.replace(needle,replacement,1)
-
 s=s.replace('''            status.text=AnalysisEngine.noSignalReason(symbol,period,candles)
             showSignalCard(SignalStore.loadActive(this,symbol,period))
             return''','''            status.text=AnalysisEngine.noSignalReason(symbol,period,candles)
@@ -84,7 +94,7 @@ s=s.replace('''            status.text=AnalysisEngine.noSignalReason(symbol,peri
 p.write_text(s)
 
 # -----------------------------------------------------------------------------
-# Floating mode: same real TradingView visual chart; no chart-side FCS socket.
+# Floating mode: same real TradingView visual chart; no FCS live socket ownership.
 # -----------------------------------------------------------------------------
 p=Path('app/src/main/java/com/mh/analysis/OverlayService.kt')
 s=p.read_text()
@@ -93,8 +103,17 @@ s=s.replace('loadDataWithBaseURL("https://unpkg.com/",html,"text/html","UTF-8",n
             'loadDataWithBaseURL("https://s3.tradingview.com/",html,"text/html","UTF-8",null)')
 s=re.sub(r'override fun onCreate\(\)\{super\.onCreate\(\);FcsClient\.init\(this\);LiveSocketHub\.addListener\(this\);.*?;wm=getSystemService',
          'override fun onCreate(){super.onCreate();FcsClient.init(this);wm=getSystemService',s,count=1)
-s=re.sub(r'''\n    override fun onLiveCandle\(symbol:String,timeframe:String,candle:Candle\)\{.*?\}\n''','\n',s,count=1,flags=re.S)
-s=s.replace('LiveSocketHub.removeListener(this);','')
+# Remove visual-only socket references robustly.
+clean=[]
+for line in s.splitlines():
+    if 'override fun onLiveCandle(' in line: continue
+    if 'LiveSocketHub.addListener(this)' in line: continue
+    if 'LiveSocketHub.removeListener(this)' in line: continue
+    if 'val liveKey=prefs.getString("socket_api_key"' in line: continue
+    if 'LiveSocketHub.start(this,liveKey)' in line: continue
+    clean.append(line)
+s='\n'.join(clean)+'\n'
+
 if '    private fun showOverlayGuidesFromCache(){' in s:
     start=s.index('    private fun showOverlayGuidesFromCache(){')
     end=s.index('\n    private fun displayed()',start)
@@ -119,8 +138,7 @@ p.write_text(s)
 
 # -----------------------------------------------------------------------------
 # Genuine TradingView widget. It moves live independently of ANALYZE/API.
-# Custom app levels are only attempted as native TV shapes. There is no fixed
-# HTML price overlay, so nothing can drift when the user pans/zooms.
+# Custom levels are attempted only as native TV shapes; no drifting HTML overlay.
 # -----------------------------------------------------------------------------
 p=Path('app/src/main/assets/tradingview_live.html')
 html=r'''<!DOCTYPE html>
