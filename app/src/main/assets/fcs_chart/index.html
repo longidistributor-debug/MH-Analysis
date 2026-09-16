@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>FCS XAUUSD Live Chart</title>
+  <link rel="stylesheet" href="chart.css" />
+  <script src="https://fcsapi.com/demo/socket/v4/fcs-client-lib.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div class="topbar">
+      <div>
+        <div class="symbol">XAUUSD</div>
+        <div id="price" class="price">--</div>
+      </div>
+      <div id="status" class="status disconnected">Connecting…</div>
+    </div>
+    <div id="timeframes" class="timeframes" aria-hidden="true">
+      <button data-tf="1m">1m</button><button data-tf="5m">5m</button><button data-tf="15m" class="active">15m</button><button data-tf="30m">30m</button><button data-tf="1h">1H</button><button data-tf="2h">2H</button><button data-tf="4h">4H</button><button data-tf="1D">1D</button><button data-tf="1W">1W</button>
+    </div>
+    <div class="chart-wrap"><canvas id="chart"></canvas><div id="emptyState" class="empty">Waiting for XAUUSD live/history candles…</div></div>
+    <div class="quote-row"><div><span>O</span><b id="o">--</b></div><div><span>H</span><b id="h">--</b></div><div><span>L</span><b id="l">--</b></div><div><span>C</span><b id="c">--</b></div></div>
+  </div>
+  <script src="chart.js"></script>
+</body>
+</html>
