@@ -47,10 +47,11 @@ jobs:
       - run: python3 scripts/patch_v51_major_structure.py
       - run: python3 scripts/patch_v52_confirmed_structure_ob_reason.py
       - run: python3 scripts/patch_v53_feed_integrity_dynamic_sr.py
+      - run: python3 scripts/patch_v54_oanda_request_fix.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v53.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v54.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v53.apk
+          path: MH-Analysis-v54.apk
           if-no-files-found: error
