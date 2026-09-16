@@ -54,10 +54,11 @@ jobs:
       - run: python3 scripts/patch_v58_integrate_fcs_module.py
       - run: python3 scripts/patch_v59_silent_single_key_live_fallback.py
       - run: python3 scripts/patch_v60_separate_websocket_key.py
+      - run: python3 scripts/patch_v61_native_live_exact_fx.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v60.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v61.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v60.apk
+          path: MH-Analysis-v61.apk
           if-no-files-found: error
