@@ -1,123 +1,98 @@
 from pathlib import Path
 import re
 
-# v38: fix the actual lifecycle bug. Entry triggering must depend on where the
-# generated entry sits relative to the market price at signal creation, not on
-# BUY/SELL direction. BUY can be a breakout stop above price or a pullback limit
-# below price; SELL can likewise be either side.
+# v38: fix the real pending/trigger race in the current v35-v37 lifecycle.
+# The engine already stores live_origin/live_ref when a signal is accepted.
+# The bug is that activation required two observed prices to straddle Entry,
+# so a fast cross between REST polls could remain PENDING. We now use the
+# origin side: if Entry was above the market at creation, any later price at/
+# above Entry triggers it; if Entry was below, any later price at/below triggers.
 
 # -----------------------------------------------------------------------------
-# Model: remember the market price at the instant the signal was generated.
-# Existing stored signals remain compatible because the new field is nullable.
-# -----------------------------------------------------------------------------
-p=Path('app/src/main/java/com/mh/analysis/Models.kt')
-s=p.read_text()
-old='''    val validityReason:String,val slReason:String,val tp1Reason:String,val tp2Reason:String,val setupReason:String\n)'''
-new='''    val validityReason:String,val slReason:String,val tp1Reason:String,val tp2Reason:String,val setupReason:String,\n    val originPrice:Double?=null\n)'''
-if old not in s: raise SystemExit('v38 Models Signal anchor not found')
-s=s.replace(old,new,1)
-p.write_text(s)
-
-# -----------------------------------------------------------------------------
-# AnalysisEngine: persist last selected-timeframe close as the signal origin.
-# -----------------------------------------------------------------------------
-p=Path('app/src/main/java/com/mh/analysis/AnalysisEngine.kt')
-s=p.read_text()
-needle=',setupReason)\n    }\n\n    fun sameSetup'
-if needle not in s: raise SystemExit('v38 AnalysisEngine Signal return anchor not found')
-s=s.replace(needle,',setupReason,last.c)\n    }\n\n    fun sameSetup',1)
-p.write_text(s)
-
-# -----------------------------------------------------------------------------
-# SignalStore: origin-aware entry crossing, immediate alarm arming, serialization,
-# and a structure-expiry precheck so an observed Entry can never be expired first.
+# SignalStore
 # -----------------------------------------------------------------------------
 p=Path('app/src/main/java/com/mh/analysis/SignalStore.kt')
 s=p.read_text()
 
-# Accepted signals get an alarm row immediately. Do not wait for a background
-# service iteration; a fast market can cross Entry seconds after analysis.
-old='''        saveActive(c,ActiveSignal(candidate,state="PENDING"));return true\n'''
-new='''        saveActive(c,ActiveSignal(candidate,state="PENDING"))\n        AlarmStore.ensureArmed(c,candidate)\n        candidate.originPrice?.let{prefs(c).edit().putString("last_price_${candidate.id}",it.toString()).apply()}\n        return true\n'''
-if old not in s: raise SystemExit('v38 acceptCandidate anchor not found')
-s=s.replace(old,new,1)
-
-# Persist originPrice in records/preferences while remaining backward compatible.
-s=s.replace('.put("setupReason",s.setupReason).put("reasons",reasons)', '.put("setupReason",s.setupReason).put("originPrice",s.originPrice).put("reasons",reasons)',1)
-old_from='''j.optString("setupReason","Weighted confluence."))}'''
-new_from='''j.optString("setupReason","Weighted confluence."),if(j.isNull("originPrice"))null else j.optDouble("originPrice"))}'''
-if old_from not in s: raise SystemExit('v38 signalFromJson anchor not found')
-s=s.replace(old_from,new_from,1)
-
-# Replace live-price lifecycle with origin/crossing logic. The old code assumed
-# BUY means price must fall to Entry and SELL means price must rise to Entry,
-# which is exactly why breakout entries stayed PENDING after being crossed.
-start=s.index('    fun processLivePrice(c:Context,symbol:String,price:Double,at:Long=System.currentTimeMillis())')
-end=s.index('\n    fun expireAllPendingForVolatility',start)
-new_live='''    private fun entryCrossed(s:Signal,price:Double,previous:Double?=null):Boolean{\n        val origin=s.originPrice\n        return when{\n            origin!=null&&origin.isFinite()&&origin<s.entry -> price>=s.entry\n            origin!=null&&origin.isFinite()&&origin>s.entry -> price<=s.entry\n            origin!=null&&origin.isFinite() -> true\n            previous!=null&&previous.isFinite() -> (previous<=s.entry&&price>=s.entry)||(previous>=s.entry&&price<=s.entry)\n            else -> false\n        }\n    }\n\n    /** Process the newest observed market price. Entry is triggered by the\n     * side of Entry relative to the market when the signal was CREATED, not by\n     * BUY/SELL direction. This supports both stop/breakout and limit/pullback entries.\n     */\n    fun processLivePrice(c:Context,symbol:String,price:Double,at:Long=System.currentTimeMillis(),source:String="LIVE"):List<ProcessEvent>{\n        if(price.isNaN()||price.isInfinite())return emptyList()\n        val events=mutableListOf<ProcessEvent>()\n        pendingSignals(c).filter{it.signal.symbol==symbol}.forEach{pending->\n            val sig=pending.signal\n            if(at<=sig.createdAt)return@forEach\n            val key="last_price_${sig.id}"\n            val previous=prefs(c).getString(key,null)?.toDoubleOrNull()\n            val reached=entryCrossed(sig,price,previous)\n            prefs(c).edit().putString(key,price.toString()).apply()\n            if(reached){\n                clearActive(c,sig.symbol,sig.timeframe)\n                var active=ActiveSignal(sig,at,pending.barsSeen+1,"ACTIVE")\n                saveLast(c,active)\n                prefs(c).edit().putString("trigger_reason_${sig.id}","$source price ${fmtPrice(price)} crossed Entry ${fmtPrice(sig.entry)}").apply()\n                AlarmStore.expireSignal(c,sig.id,"TRIGGERED")\n                val hitSl=if(sig.direction=="BUY")price<=sig.sl else price>=sig.sl\n                val hitTp=if(sig.direction=="BUY")price>=sig.tp1 else price<=sig.tp1\n                if(hitSl||hitTp){\n                    val result=if(hitSl)"LOSS" else "WIN"\n                    active=active.copy(state=result)\n                    addRecord(c,toRecord(active,result,at));saveLast(c,active);events+=ProcessEvent(sig,result,at)\n                }else{\n                    addOpen(c,active);events+=ProcessEvent(sig,"ACTIVE",at)\n                }\n            }\n        }\n        val all=openTrades(c).toMutableList();var changed=false;val it=all.listIterator()\n        while(it.hasNext()){\n            val a=it.next();val sig=a.signal\n            if(sig.symbol!=symbol||at<(a.activatedAt?:0L))continue\n            val hitSl=if(sig.direction=="BUY")price<=sig.sl else price>=sig.sl\n            val hitTp=if(sig.direction=="BUY")price>=sig.tp1 else price<=sig.tp1\n            if(hitSl||hitTp){\n                val result=if(hitSl)"LOSS" else "WIN"\n                val done=a.copy(state=result);addRecord(c,toRecord(done,result,at));saveLast(c,done);it.remove();changed=true;events+=ProcessEvent(sig,result,at)\n            }\n        }\n        if(changed)saveOpen(c,all)\n        return events\n    }\n\n    fun triggerReason(c:Context,signalId:String)=prefs(c).getString("trigger_reason_$signalId","").orEmpty()\n    private fun fmtPrice(v:Double)=if(kotlin.math.abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)\n'''
+start=s.index('    @Synchronized fun processLivePrice(')
+end=s.index('\n\n    /** Structure/momentum validity check',start)
+new_live='''    private fun storedLivePrice(c:Context,key:String):Double?{\n        val raw=prefs(c).getLong(key,Long.MIN_VALUE)\n        return if(raw==Long.MIN_VALUE)null else java.lang.Double.longBitsToDouble(raw).takeIf{it.isFinite()}\n    }\n\n    private fun entryReachedFromOrigin(c:Context,sig:Signal,price:Double):Boolean{\n        val origin=storedLivePrice(c,"live_origin_${sig.id}")\n        val previous=storedLivePrice(c,"live_ref_${sig.id}")\n        val tolerance=(sig.atr*.035).coerceAtLeast(kotlin.math.abs(sig.entry)*0.000005)\n        return when{\n            origin!=null&&sig.entry>origin+tolerance -> price>=sig.entry-tolerance\n            origin!=null&&sig.entry<origin-tolerance -> price<=sig.entry+tolerance\n            origin!=null -> kotlin.math.abs(price-sig.entry)<=tolerance\n            previous!=null -> sig.entry in (minOf(previous,price)-tolerance)..(maxOf(previous,price)+tolerance)\n            else -> kotlin.math.abs(price-sig.entry)<=tolerance\n        }\n    }\n\n    /** Tick/current-price lifecycle tracking.\n     * Activation is origin-aware, so both breakout/stop and pullback/limit\n     * entries work even when the exact crossing happened between two polls.\n     */\n    @Synchronized fun processLivePrice(c:Context,symbol:String,price:Double,at:Long=System.currentTimeMillis(),source:String="LIVE"):List<ProcessEvent>{\n        if(!price.isFinite())return emptyList()\n        val events=mutableListOf<ProcessEvent>()\n        pendingSignals(c).filter{it.signal.symbol==symbol}.forEach{pending->\n            val sig=pending.signal\n            if(at<=sig.createdAt)return@forEach\n            val originKey="live_origin_${sig.id}"\n            val refKey="live_ref_${sig.id}"\n            val existingOrigin=storedLivePrice(c,originKey)\n            val existingRef=storedLivePrice(c,refKey)\n            val origin=existingOrigin?:existingRef?:price\n            val reached=entryReachedFromOrigin(c,sig,price)\n            prefs(c).edit()\n                .putLong(originKey,java.lang.Double.doubleToRawLongBits(origin))\n                .putLong(refKey,java.lang.Double.doubleToRawLongBits(price))\n                .apply()\n\n            if(reached){\n                clearActive(c,sig.symbol,sig.timeframe)\n                var active=ActiveSignal(sig,at,pending.barsSeen+1,"ACTIVE")\n                saveLast(c,active)\n                prefs(c).edit()\n                    .putString("live_validity_${sig.id}","Entry reached; trade is ACTIVE.")\n                    .putString("trigger_reason_${sig.id}","$source price ${fmtLifecyclePrice(price)} reached Entry ${fmtLifecyclePrice(sig.entry)}.")\n                    .apply()\n\n                val hitSl=if(sig.direction=="BUY")price<=sig.sl else price>=sig.sl\n                val hitTp=if(sig.direction=="BUY")price>=sig.tp1 else price<=sig.tp1\n                if(hitSl||hitTp){\n                    val result=if(hitSl)"LOSS" else "WIN"\n                    active=active.copy(state=result)\n                    addRecord(c,toRecord(active,result,at));saveLast(c,active)\n                    AlarmStore.expireSignal(c,sig.id,"TRIGGERED")\n                    events+=ProcessEvent(sig,result,at)\n                }else{\n                    addOpen(c,active)\n                    AlarmStore.expireSignal(c,sig.id,"TRIGGERED")\n                    events+=ProcessEvent(sig,"ACTIVE",at)\n                }\n            }\n        }\n\n        val all=openTrades(c).toMutableList();var changed=false;val it=all.listIterator()\n        while(it.hasNext()){\n            val a=it.next();val sig=a.signal\n            if(sig.symbol!=symbol||at<(a.activatedAt?:0L))continue\n            val hitSl=if(sig.direction=="BUY")price<=sig.sl else price>=sig.sl\n            val hitTp=if(sig.direction=="BUY")price>=sig.tp1 else price<=sig.tp1\n            if(hitSl||hitTp){\n                val result=if(hitSl)"LOSS" else "WIN"\n                val done=a.copy(state=result)\n                addRecord(c,toRecord(done,result,at));saveLast(c,done)\n                prefs(c).edit().putString("live_validity_${sig.id}","Trade closed: $result.").apply()\n                it.remove();changed=true;events+=ProcessEvent(sig,result,at)\n            }\n        }\n        if(changed)saveOpen(c,all)\n        return events\n    }\n\n    fun triggerReason(c:Context,signalId:String)=prefs(c).getString("trigger_reason_$signalId","").orEmpty()\n    private fun fmtLifecyclePrice(v:Double)=if(kotlin.math.abs(v)>=100)String.format(Locale.US,"%.2f",v)else String.format(Locale.US,"%.5f",v)\n'''
 s=s[:start]+new_live+s[end:]
 
-# Before dynamic structure invalidation can EXPIRE a pending signal, honor the
-# newest observed price. This prevents "Entry already crossed but structure task
-# expired it first" races when REST recovery and structure checks interleave.
+# Historical candle activation should also leave an auditable trigger reason.
+old='''                clearActive(c,s.symbol,s.timeframe);var active=ActiveSignal(s,t,pending.barsSeen+1,"ACTIVE");saveLast(c,active);AlarmStore.expireSignal(c,s.id,"TRIGGERED")\n'''
+new='''                clearActive(c,s.symbol,s.timeframe);var active=ActiveSignal(s,t,pending.barsSeen+1,"ACTIVE");saveLast(c,active);prefs(c).edit().putString("trigger_reason_${s.id}","1m candle range touched Entry ${fmtLifecyclePrice(s.entry)}.").apply();AlarmStore.expireSignal(c,s.id,"TRIGGERED")\n'''
+if old not in s: raise SystemExit('v38 minute-candle trigger anchor not found')
+s=s.replace(old,new,1)
+
+# Structure invalidation must never beat an already-observed Entry cross.
 old='''        if(active.state!="PENDING"||candles.size<60)return emptyList()\n        val check=AnalysisEngine.setupCheck(active.signal,candles)\n'''
-new='''        if(active.state!="PENDING"||candles.size<60)return emptyList()\n        val observed=prefs(c).getString("last_price_${active.signal.id}",null)?.toDoubleOrNull()\n        if(observed!=null&&entryCrossed(active.signal,observed,null)){\n            val recovered=processLivePrice(c,symbol,observed,at,"STRUCTURE_PRECHECK")\n            if(recovered.isNotEmpty())return recovered\n        }\n        val check=AnalysisEngine.setupCheck(active.signal,candles)\n'''
-if old not in s: raise SystemExit('v38 evaluateLiveStructure precheck anchor not found')
+new='''        if(active.state!="PENDING"||candles.size<60)return emptyList()\n        val observed=storedLivePrice(c,"live_ref_${active.signal.id}")\n        if(observed!=null&&entryReachedFromOrigin(c,active.signal,observed)){\n            val recovered=processLivePrice(c,symbol,observed,at,"STRUCTURE_PRECHECK")\n            if(recovered.isNotEmpty())return recovered\n        }\n        val check=AnalysisEngine.setupCheck(active.signal,candles)\n'''
+if old not in s: raise SystemExit('v38 structure precheck anchor not found')
 s=s.replace(old,new,1)
 p.write_text(s)
 
 # -----------------------------------------------------------------------------
-# AlarmService: source-tagged live observations, same-minute recovery, preserve
-# manual Alarm OFF, and never run structure expiry ahead of a stale price feed.
+# AlarmService
 # -----------------------------------------------------------------------------
 p=Path('app/src/main/java/com/mh/analysis/AlarmService.kt')
 s=p.read_text()
 
-s=s.replace('handleEvents(SignalStore.processLivePrice(this,symbol,candle.c,now),armedBefore)', 'markTracker(symbol,candle.c,"WEBSOCKET");handleEvents(SignalStore.processLivePrice(this,symbol,candle.c,now,"WEBSOCKET"),armedBefore)',1)
-
-# Manual OFF must remain OFF. Only create/arm when the signal has no alarm row.
+# Manual alarm OFF must stay OFF; only repair a missing alarm row.
 s=s.replace('            pending.forEach{AlarmStore.ensureArmed(this@AlarmService,it.signal)}\n', '            pending.forEach{if(AlarmStore.forSignal(this@AlarmService,it.signal.id)==null)AlarmStore.ensureArmed(this@AlarmService,it.signal)}\n',1)
 
-# Replace startup reconciliation. Include a signal-created minute via its CLOSE
-# observation, while using full OHLC only for candles that started after creation.
+# Websocket price observations get a source tag and visible tracker heartbeat.
+old='''            handleEvents(SignalStore.processLivePrice(this,symbol,candle.c,now),armedBefore)\n'''
+new='''            markTracker(symbol,candle.c,"WEBSOCKET")\n            handleEvents(SignalStore.processLivePrice(this,symbol,candle.c,now,"WEBSOCKET"),armedBefore)\n'''
+if old not in s: raise SystemExit('v38 websocket lifecycle anchor not found')
+s=s.replace(old,new,1)
+
+# Startup/restart reconciliation: the signal-created 1m candle is reconciled by
+# its closing observation; later candles also use their full OHLC range.
 start=s.index('    private fun reconcileRecentHistory(){')
 end=s.index('\n\n    private fun pollLifecycle',start)
 new_reconcile='''    private fun reconcileRecentHistory(){\n        val key=prefs.getString("api_key","")?.trim().orEmpty()\n        if(key.isBlank())return\n        val symbols=(SignalStore.pendingSignals(this).map{it.signal.symbol}+SignalStore.openTrades(this).map{it.signal.symbol}).distinct()\n        symbols.forEach{symbol->\n            runCatching{\n                val(out,credits)=FcsClient.history(key,symbol,"1m",220,true);addUsage(credits)\n                if(out.isEmpty())return@runCatching\n                val pending=SignalStore.pendingSignals(this).filter{it.signal.symbol==symbol}\n                val open=SignalStore.openTrades(this).filter{it.signal.symbol==symbol}\n                val floor=(pending.map{it.signal.createdAt}+open.map{it.activatedAt?:it.signal.createdAt}).minOrNull()?:System.currentTimeMillis()\n                out.filter{toMillis(it.t)+60_000L>floor}.sortedBy{toMillis(it.t)}.forEach{candle->\n                    val startAt=toMillis(candle.t);val endAt=startAt+60_000L\n                    var armedBefore=AlarmStore.armed(this).filter{it.symbol==symbol}.associateBy{it.signalId}\n                    if(startAt>floor)handleEvents(SignalStore.processMinuteCandle(this,symbol,candle),armedBefore)\n                    armedBefore=AlarmStore.armed(this).filter{it.symbol==symbol}.associateBy{it.signalId}\n                    markTracker(symbol,candle.c,"HISTORY_CLOSE")\n                    handleEvents(SignalStore.processLivePrice(this,symbol,candle.c,endAt,"HISTORY_CLOSE"),armedBefore)\n                }\n                val armedBefore=AlarmStore.armed(this).filter{it.symbol==symbol}.associateBy{it.signalId}\n                markTracker(symbol,out.last().c,"HISTORY_LAST")\n                handleEvents(SignalStore.processLivePrice(this,symbol,out.last().c,System.currentTimeMillis(),"HISTORY_LAST"),armedBefore)\n            }\n        }\n        syncMonitorNotification()\n    }'''
 s=s[:start]+new_reconcile+s[end:]
 
-# Tag REST lifecycle observations and expose tracker freshness for UI/debugging.
-s=s.replace('handleEvents(SignalStore.processLivePrice(this,symbol,prev.c,endAt),armedBefore)', 'markTracker(symbol,prev.c,"REST_PREVIOUS");handleEvents(SignalStore.processLivePrice(this,symbol,prev.c,endAt,"REST_PREVIOUS"),armedBefore)',1)
-s=s.replace('handleEvents(SignalStore.processLivePrice(this,symbol,snapshot.active.c,System.currentTimeMillis()),armedBefore)', 'markTracker(symbol,snapshot.active.c,"REST_ACTIVE");handleEvents(SignalStore.processLivePrice(this,symbol,snapshot.active.c,System.currentTimeMillis(),"REST_ACTIVE"),armedBefore)',1)
+# REST lifecycle snapshots are also source-tagged.
+old='''                handleEvents(SignalStore.processLivePrice(this,symbol,prev.c,endAt),armedBefore)\n'''
+new='''                markTracker(symbol,prev.c,"REST_PREVIOUS")\n                handleEvents(SignalStore.processLivePrice(this,symbol,prev.c,endAt,"REST_PREVIOUS"),armedBefore)\n'''
+if old not in s: raise SystemExit('v38 REST previous anchor not found')
+s=s.replace(old,new,1)
+old='''        handleEvents(SignalStore.processLivePrice(this,symbol,snapshot.active.c,System.currentTimeMillis()),armedBefore)\n'''
+new='''        markTracker(symbol,snapshot.active.c,"REST_ACTIVE")\n        handleEvents(SignalStore.processLivePrice(this,symbol,snapshot.active.c,System.currentTimeMillis(),"REST_ACTIVE"),armedBefore)\n'''
+if old not in s: raise SystemExit('v38 REST active anchor not found')
+s=s.replace(old,new,1)
 
-anchor='''    private fun syncMonitorNotification(){\n'''
-if 'private fun markTracker(' not in s:
-    helper='''    private fun markTracker(symbol:String,price:Double,source:String){\n        prefs.edit().putString("tracker_price_${symbol.uppercase()}",price.toString())\n            .putLong("tracker_at_${symbol.uppercase()}",System.currentTimeMillis())\n            .putString("tracker_source_${symbol.uppercase()}",source).apply()\n    }\n\n'''
-    if anchor not in s: raise SystemExit('v38 AlarmService helper anchor not found')
-    s=s.replace(anchor,helper+anchor,1)
-
-# Do not let a structure-only REST task expire a setup if lifecycle price data is stale.
+# Structure checks are not allowed to expire a setup when the lifecycle price
+# tracker itself is stale. First recover a fresh price, then judge structure.
 old='''    private fun pollStructure(key:String,symbol:String,timeframe:String){\n        val(out,credits)=FcsClient.history(key,symbol,timeframe,220,true);addUsage(credits)\n        if(out.size<60)return\n'''
 new='''    private fun pollStructure(key:String,symbol:String,timeframe:String){\n        val priceAge=System.currentTimeMillis()-prefs.getLong("tracker_at_${symbol.uppercase()}",0L)\n        if(priceAge>35_000L)return\n        val(out,credits)=FcsClient.history(key,symbol,timeframe,220,true);addUsage(credits)\n        if(out.size<60)return\n'''
 if old not in s: raise SystemExit('v38 pollStructure anchor not found')
 s=s.replace(old,new,1)
+
+anchor='''    private fun syncMonitorNotification(){\n'''
+helper='''    private fun markTracker(symbol:String,price:Double,source:String){\n        prefs.edit()\n            .putString("tracker_price_${symbol.uppercase()}",price.toString())\n            .putLong("tracker_at_${symbol.uppercase()}",System.currentTimeMillis())\n            .putString("tracker_source_${symbol.uppercase()}",source)\n            .apply()\n    }\n\n'''
+if anchor not in s: raise SystemExit('v38 tracker helper anchor not found')
+s=s.replace(anchor,helper+anchor,1)
 p.write_text(s)
 
 # -----------------------------------------------------------------------------
-# Main UI: show the actual lifecycle tracker source/price with pending/active
-# signals. This makes it obvious whether the background tracker is fresh.
+# Main UI: expose the background tracker price/source/age and trigger reason.
+# This makes it immediately visible whether lifecycle tracking is alive.
 # -----------------------------------------------------------------------------
 p=Path('app/src/main/java/com/mh/analysis/MainActivityV29.kt')
 s=p.read_text()
 old='''        out.append("➜ TP2: ${price(sig.tp2)}\\n\\n")\n'''
-new='''        out.append("➜ TP2: ${price(sig.tp2)}\\n")\n        val trackerPrefs=getSharedPreferences("mh",MODE_PRIVATE)\n        val tracker=trackerPrefs.getString("tracker_price_${sig.symbol.uppercase()}",null)?.toDoubleOrNull()\n        val trackerAt=trackerPrefs.getLong("tracker_at_${sig.symbol.uppercase()}",0L)\n        val trackerSource=trackerPrefs.getString("tracker_source_${sig.symbol.uppercase()}","").orEmpty()\n        if(tracker!=null&&trackerAt>0L){val age=((System.currentTimeMillis()-trackerAt).coerceAtLeast(0L))/1000L;out.append("➜ TRACKER: ${price(tracker)} • $trackerSource • ${age}s ago\\n")}\n        SignalStore.triggerReason(this,sig.id).takeIf{it.isNotBlank()}?.let{out.append("➜ TRIGGER: $it\\n")}\n        out.append("\\n")\n'''
-if old not in s: raise SystemExit('v38 MainActivity formatSignal anchor not found')
+new='''        out.append("➜ TP2: ${price(sig.tp2)}\\n")\n        val trackerPrefs=getSharedPreferences("mh",MODE_PRIVATE)\n        val tracker=trackerPrefs.getString("tracker_price_${sig.symbol.uppercase()}",null)?.toDoubleOrNull()\n        val trackerAt=trackerPrefs.getLong("tracker_at_${sig.symbol.uppercase()}",0L)\n        val trackerSource=trackerPrefs.getString("tracker_source_${sig.symbol.uppercase()}","").orEmpty()\n        if(tracker!=null&&trackerAt>0L){\n            val age=((System.currentTimeMillis()-trackerAt).coerceAtLeast(0L))/1000L\n            out.append("➜ TRACKER: ${price(tracker)} • $trackerSource • ${age}s ago\\n")\n        }\n        SignalStore.triggerReason(this,sig.id).takeIf{it.isNotBlank()}?.let{out.append("➜ TRIGGER: $it\\n")}\n        out.append("\\n")\n'''
+if old not in s: raise SystemExit('v38 UI tracker anchor not found')
 s=s.replace(old,new,1)
 p.write_text(s)
 
 # -----------------------------------------------------------------------------
-# Version metadata.
+# Version
 # -----------------------------------------------------------------------------
 p=Path('app/build.gradle.kts')
 s=p.read_text();s=re.sub(r'versionCode = \d+','versionCode = 38',s);s=re.sub(r'versionName = "[^"]+"','versionName = "38.0"',s);p.write_text(s)
 
-print('v38 origin-aware entry-cross lifecycle patch applied')
+print('v38 reliable entry-cross lifecycle patch applied')
