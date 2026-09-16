@@ -7,7 +7,8 @@ import re
 # 3) If the app missed multiple candles, refetch exact selected-timeframe history instead of appending one candle to an old series.
 # 4) Replace broad min/max S/R with closed-candle timeframe-specific pivot/cluster structure.
 #    The running candle may invalidate/role-reverse a level immediately, but cannot create a confirmed pivot by itself.
-# 5) No hard-coded user-spoken price levels.
+# 5) Clear old XAUUSD signals created before the feed migration.
+# 6) No hard-coded user-spoken price levels.
 
 # -----------------------------------------------------------------------------
 # FCS client: fresh provider-specific cache + quote freshness + gap recovery.
@@ -170,6 +171,21 @@ new_levels='''    fun majorRangeLevels(timeframe:String,c:List<Candle>):Pair<Dou
     }'''
 s=s[:start]+new_levels+s[end:]
 p.write_text(s)
+
+# -----------------------------------------------------------------------------
+# Main activity migration: do not show any Gold setup generated from pre-v53 data.
+# -----------------------------------------------------------------------------
+p=Path('app/src/main/java/com/mh/analysis/MainActivityV29.kt')
+m=p.read_text()
+anchor='        setContentView(buildUi())\n'
+if 'v53_feed_migrated' not in m:
+    if anchor not in m: raise SystemExit('v53 MainActivity setContentView anchor not found')
+    m=m.replace(anchor,anchor+'''        if(!prefs.getBoolean("v53_feed_migrated",false)){
+            SignalStore.clearActiveForSymbol(this,"XAUUSD")
+            prefs.edit().putBoolean("v53_feed_migrated",true).apply()
+        }
+''',1)
+p.write_text(m)
 
 # -----------------------------------------------------------------------------
 # Version
