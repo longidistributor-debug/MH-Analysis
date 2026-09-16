@@ -35,10 +35,11 @@ jobs:
       - run: python3 scripts/patch_v41_timeframe_engine.py
       - run: python3 scripts/patch_v41_fix.py
       - run: python3 scripts/patch_v42_all_timeframes_chart_levels.py
+      - run: python3 scripts/patch_v43_ui_chart_overlay.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v42.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v43.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v42.apk
+          path: MH-Analysis-v43.apk
           if-no-files-found: error
