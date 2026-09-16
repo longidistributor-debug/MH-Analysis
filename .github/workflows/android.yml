@@ -31,10 +31,11 @@ jobs:
       - run: python3 scripts/patch_v37_runtime.py
       - run: python3 scripts/patch_v38.py
       - run: python3 scripts/patch_v39.py
+      - run: python3 scripts/patch_v40_video_techniques.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v39.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v40.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v39.apk
+          path: MH-Analysis-v40.apk
           if-no-files-found: error
