@@ -30,7 +30,8 @@ s=s.replace('''    private fun switchVisibleChart(){pairLabel.text="$symbol • 
 
 # Signal card no longer draws over TradingView. It only refreshes the separate snapshot.
 start=s.index('    private fun showSignalCard(a:ActiveSignal?){')
-end=s.index('\n    private fun showExisting(){',start)
+next_guides='\n    private fun showAnalysisGuides(data:List<Candle>){'
+end=s.index(next_guides,start) if next_guides in s[start:] else s.index('\n    private fun showExisting(){',start)
 new_signal_card='''    private fun showSignalCard(a:ActiveSignal?){
         updateSnapshot()
     }
@@ -112,17 +113,14 @@ s=s[:start]+new_format+s[end:]
 
 # Ensure styledOutput recognizes v44 section names.
 s=s.replace('''val section=trimmed in setOf("SIGNAL","TRADE LEVELS","WHY THIS TRADE","CONFIRMATIONS","RE-EVALUATION")''',
-'''val section=trimmed in setOf("CURRENT SETUP","MARKET MAP • $period","SETUP","MATCHED CONFIRMATIONS","TRADE LEVELS","RE-EVALUATION")''',1)
-# MARKET MAP contains dynamic timeframe; handle prefix too.
+'''val section=trimmed in setOf("CURRENT SETUP","SETUP","MATCHED CONFIRMATIONS","TRADE LEVELS","RE-EVALUATION")''',1)
 s=s.replace('''            if(section&&end>start){''','''            if((section||trimmed.startsWith("MARKET MAP"))&&end>start){''',1)
 
 p.write_text(s)
 
-# Floating chart also becomes clean: no HTML cards/market-map overlay. Its text status
-# remains outside the chart, so it can still show a compact signal state.
+# TradingView is visual-only. Hide app-added overlays and disable native app shapes.
 p=Path('app/src/main/assets/tradingview_live.html')
 s=p.read_text()
-# Permanently hide all app-added visual layers on top of TradingView.
 if '/* v44 clean chart */' not in s:
     s=s.replace('</style>','''/* v44 clean chart */\n#analysisGuideLayer,#analysisLegend,#signalCard,#apiState{display:none!important;visibility:hidden!important}\n</style>''',1)
     override='''\n// v44: TradingView is visual-only. All app analysis is shown outside the chart.\nfunction redrawAll(){try{removeNativeShapes()}catch(e){}}\nfunction drawSignal(s){lastSignal=s;try{removeNativeShapes()}catch(e){}}\nfunction setAnalysisLevels(raw){try{lastAnalysis=(typeof raw==='string'?JSON.parse(raw):raw)}catch(e){lastAnalysis=null}try{removeNativeShapes()}catch(e){}}\nfunction clearAnalysisLevels(){lastAnalysis=null;try{removeNativeShapes()}catch(e){}}\nfunction renderSignalCard(s){const el=document.getElementById('signalCard');if(el){el.style.display='none';el.innerHTML=''}}\nfunction renderAnalysisDom(x){const a=document.getElementById('analysisGuideLayer'),b=document.getElementById('analysisLegend');if(a)a.innerHTML='';if(b){b.innerHTML='';b.style.display='none'}}\n'''
