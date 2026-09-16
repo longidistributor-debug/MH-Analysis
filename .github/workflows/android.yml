@@ -44,10 +44,11 @@ jobs:
       - run: python3 scripts/patch_v48_provider_freshness.py
       - run: python3 scripts/patch_v49_current_map_ui.py
       - run: python3 scripts/patch_v50_ui_cleanup.py
+      - run: python3 scripts/patch_v51_major_structure.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v50.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v51.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v50.apk
+          path: MH-Analysis-v51.apk
           if-no-files-found: error
