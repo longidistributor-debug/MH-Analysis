@@ -19,7 +19,7 @@ jobs:
       - run: /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.10.2'
+          gradle-version: 8.10.2
       - run: python3 scripts/patch_v31.py
       - run: python3 scripts/patch_alarm_v31.py
       - run: python3 scripts/patch_v32.py
@@ -42,10 +42,11 @@ jobs:
       - run: python3 scripts/patch_v46_light_chart_sr.py
       - run: python3 scripts/patch_v47_single_signal_live_chart.py
       - run: python3 scripts/patch_v48_provider_freshness.py
+      - run: python3 scripts/patch_v49_current_map_ui.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v48.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v49.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v48.apk
+          path: MH-Analysis-v49.apk
           if-no-files-found: error
