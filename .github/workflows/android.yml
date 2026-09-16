@@ -33,6 +33,7 @@ jobs:
       - run: python3 scripts/patch_v39.py
       - run: python3 scripts/patch_v40_video_techniques.py
       - run: python3 scripts/patch_v41_timeframe_engine.py
+      - run: python3 scripts/patch_v41_fix.py
       - run: gradle --no-daemon assembleDebug
       - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v41.apk
       - uses: actions/upload-artifact@v4
