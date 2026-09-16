@@ -40,10 +40,11 @@ jobs:
       - run: python3 scripts/patch_v45_lightweight_chart.py
       - run: python3 scripts/patch_v45_fix.py
       - run: python3 scripts/patch_v46_light_chart_sr.py
+      - run: python3 scripts/patch_v47_single_signal_live_chart.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v46.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v47.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v46.apk
+          path: MH-Analysis-v47.apk
           if-no-files-found: error
