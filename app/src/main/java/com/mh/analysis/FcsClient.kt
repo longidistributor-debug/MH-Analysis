@@ -24,6 +24,7 @@ object FcsClient {
     private const val MAX_REQUESTS_PER_WINDOW=3
     private const val REQUEST_WINDOW_MS=61_000L
     private const val DISK_LIMIT=2200
+    private const val SAFE_HISTORY_LENGTH=300
     private val periods=listOf("1m","5m","15m","30m","1h")
     private val symbols=listOf("XAUUSD","BTCUSDT")
 
@@ -53,11 +54,6 @@ object FcsClient {
     @Synchronized fun hasUsableHistory(symbol:String,period:String,min:Int=100)=
         (cache[cacheKey(symbol,period)]?.candles?.size?:0)>=min
 
-    /**
-     * Returns cached candles only when their newest candle belongs to the current
-     * or immediately preceding timeframe bucket. This is intended for live-stream
-     * updated cache; persisted old history is never treated as a fresh Analyze snapshot.
-     */
     @Synchronized fun freshSnapshot(symbol:String,period:String,min:Int=100,length:Int=2200):List<Candle>?{
         val tf=normalizePeriod(period)
         val data=cache[cacheKey(symbol,tf)]?.candles.orEmpty()
@@ -104,45 +100,28 @@ object FcsClient {
     }
 
     /**
-     * Fetches only the history family needed by the selected timeframe.
-     * 1m/5m share a 1m seed; 15m/30m share a 15m seed; 1h uses a 1h seed.
-     * force=true NEVER silently falls back to stale cache.
+     * Each selected timeframe is fetched directly. Do not derive 5m from 1m or 30m
+     * from 15m during a manual analysis because that reduces the usable candle count
+     * and can carry the wrong snapshot semantics across timeframes.
+     *
+     * The provider's lower-tier history endpoint accepts at most 300 length-based
+     * candles per call, so every fresh request is deliberately capped at 300.
      */
     @Synchronized fun seedForPeriod(accessKey:String,symbol:String,period:String,force:Boolean=false):Pair<List<Candle>,Int>{
         val sym=symbol.uppercase();val tf=normalizePeriod(period)
         val current=cache[cacheKey(sym,tf)]?.candles.orEmpty()
-        if(current.size>=100&&!force)return current.takeLast(2200) to 0
+        if(current.size>=100&&!force)return current.takeLast(SAFE_HISTORY_LENGTH) to 0
         if(!canRequestNow()){
-            if(!force&&current.isNotEmpty())return current.takeLast(2200) to 0
+            if(!force&&current.isNotEmpty())return current.takeLast(SAFE_HISTORY_LENGTH) to 0
             throw IllegalStateException("Fresh market snapshot is temporarily rate-limited. Try NEW ANALYZE again shortly; stale candles were not used.")
         }
-        var credits=0
-        fun fetchSeed(sourceTf:String,length:Int):List<Candle>{
-            val out=try{fetchMarket(sym,accessKey,sourceTf,length)}catch(e:Exception){noteRequest();throw e}
-            noteRequest();credits+=out.second
-            return out.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
-        }
-        when(tf){
-            "1m","5m"->{
-                // 1,800 one-minute candles give enough context for the complete previous day
-                // while also creating a fresh 5m aggregate from the same market snapshot.
-                val one=fetchSeed("1m",1800)
-                putCache(sym,"1m",one,true)
-                putCache(sym,"5m",aggregate(one,5),true)
-            }
-            "15m","30m"->{
-                val fifteen=fetchSeed("15m",320)
-                putCache(sym,"15m",fifteen,true)
-                putCache(sym,"30m",aggregate(fifteen,30),true)
-            }
-            "1h"->{
-                val hour=fetchSeed("1h",320)
-                putCache(sym,"1h",hour,true)
-            }
-        }
-        val result=cache[cacheKey(sym,tf)]?.candles.orEmpty().takeLast(2200)
-        if(result.isEmpty())throw IllegalStateException("No usable history returned for $sym $tf")
-        return result to credits
+
+        val(out,credits)=try{fetchMarket(sym,accessKey,tf,SAFE_HISTORY_LENGTH)}catch(e:Exception){noteRequest();throw e}
+        noteRequest()
+        val clean=out.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
+        if(clean.size<100)throw IllegalStateException("Not enough fresh $sym $tf candles were returned for reliable analysis.")
+        putCache(sym,tf,clean,true)
+        return clean.takeLast(SAFE_HISTORY_LENGTH) to credits
     }
 
     /** Previous day high/low is fixed after the day closes, so it is cached by UTC date. */
@@ -160,7 +139,7 @@ object FcsClient {
             }
         }
         if(!canRequestNow())return null to 0
-        val(out,credits)=try{fetchMarket(sym,accessKey,"1d",7)}catch(e:Exception){noteRequest();throw e}
+        val(out,credits)=try{fetchMarket(sym,accessKey,"1D",7)}catch(e:Exception){noteRequest();throw e}
         noteRequest()
         val todayDate=LocalDate.now(ZoneOffset.UTC)
         val previous=out.sortedBy{normalizeTs(it.t)}.filter{
@@ -174,11 +153,12 @@ object FcsClient {
     }
 
     @Synchronized fun history(accessKey:String,symbol:String,period:String,length:Int=220,force:Boolean=false):Pair<List<Candle>,Int>{
-        val hit=cache[cacheKey(symbol,period)]?.candles?.takeLast(length)
+        val requested=length.coerceAtMost(SAFE_HISTORY_LENGTH)
+        val hit=cache[cacheKey(symbol,period)]?.candles?.takeLast(requested)
         if(!hit.isNullOrEmpty()&&hit.size>=100&&!force)return hit to 0
         val(out,credits)=seedForPeriod(accessKey,symbol,period,force)
         if(out.size<60)throw IllegalStateException("$symbol $period history is still building.")
-        return out.takeLast(length) to credits
+        return out.takeLast(requested) to credits
     }
 
     private fun putCache(symbol:String,period:String,data:List<Candle>,persist:Boolean){
@@ -199,19 +179,6 @@ object FcsClient {
         ctx.getSharedPreferences("mh_candle_cache_v22",Context.MODE_PRIVATE).edit().putString(key,arr.toString()).apply()
     }
 
-    private fun aggregate(src:List<Candle>,targetMins:Int):List<Candle>{
-        if(targetMins<=1)return src
-        val sec=targetMins*60L
-        val out=mutableListOf<Candle>();var bucket=-1L;var o=0.0;var h=0.0;var l=0.0;var c=0.0;var v=0.0
-        fun flush(){if(bucket>=0)out+=Candle(bucket,o,h,l,c,v)}
-        for(x0 in src){
-            val x=x0.copy(t=normalizeTs(x0.t));val b=(x.t/sec)*sec
-            if(b!=bucket){flush();bucket=b;o=x.o;h=x.h;l=x.l;c=x.c;v=x.v}
-            else{h=max(h,x.h);l=kotlin.math.min(l,x.l);c=x.c;v+=x.v}
-        }
-        flush();return out
-    }
-
     private fun trimWindow(){val now=System.currentTimeMillis();while(requestTimes.isNotEmpty()&&now-requestTimes.first()>=REQUEST_WINDOW_MS)requestTimes.removeFirst()}
     private fun canRequestNow():Boolean{trimWindow();return requestTimes.size<MAX_REQUESTS_PER_WINDOW}
     private fun noteRequest(){requestTimes.addLast(System.currentTimeMillis());trimWindow()}
@@ -221,11 +188,15 @@ object FcsClient {
     }
 
     private fun fetch(group:String,key:String,symbol:String,period:String,length:Int,type:String):Pair<List<Candle>,Int>{
-        val p=normalizePeriod(period)
-        val u="https://api-v4.fcsapi.com/$group/history?symbol=${enc(symbol)}&period=${enc(p)}&length=$length&is_chart=0&type=${enc(type)}&access_key=${enc(key)}"
+        val p=requestPeriod(period)
+        val safeLength=length.coerceIn(1,SAFE_HISTORY_LENGTH)
+        val u="https://api-v4.fcsapi.com/$group/history?symbol=${enc(symbol)}&period=${enc(p)}&length=$safeLength&is_chart=0&type=${enc(type)}&access_key=${enc(key)}"
         val c=URL(u).openConnection() as HttpURLConnection;c.connectTimeout=12000;c.readTimeout=22000;c.requestMethod="GET"
         val code=c.responseCode;val body=(if(code in 200..299)c.inputStream else c.errorStream).bufferedReader().use{it.readText()}
-        if(code !in 200..299)throw IllegalStateException("Market data HTTP $code")
+        if(code !in 200..299){
+            val msg=runCatching{JSONObject(body).optString("msg")}.getOrNull().orEmpty().ifBlank{"request rejected"}
+            throw IllegalStateException("Market data HTTP $code • $msg")
+        }
         val root=JSONObject(body);if(root.has("status")&&!root.optBoolean("status",true))throw IllegalStateException(root.optString("msg","Market data request failed"))
         val credits=root.optJSONObject("info")?.optInt("credit_count",1)?:1;val response=root.opt("response")?:root.opt("data")?:root;val candles=mutableListOf<Candle>()
         fun add(o:JSONObject,k:String=""){if(!o.has("o")||!o.has("c"))return;candles+=Candle(normalizeTs(o.optLong("t",k.toLongOrNull()?:0L)),o.optDouble("o"),o.optDouble("h"),o.optDouble("l"),o.optDouble("c"),o.optDouble("v",0.0))}
@@ -234,7 +205,8 @@ object FcsClient {
     }
 
     private fun timeframeSeconds(p:String)=when(normalizePeriod(p)){"1m"->60L;"5m"->300L;"15m"->900L;"30m"->1800L;"1h"->3600L;else->900L}
-    private fun normalizePeriod(p:String)=when(p.trim().lowercase()){"1","1m"->"1m";"5","5m"->"5m";"15","15m"->"15m";"30","30m"->"30m";"60","1h"->"1h";"1d","d","day"->"1d";else->p.trim().lowercase()}
+    private fun normalizePeriod(p:String)=when(p.trim().lowercase()){ "1","1m"->"1m";"5","5m"->"5m";"15","15m"->"15m";"30","30m"->"30m";"60","1h"->"1h";"1d","d","day"->"1d";else->p.trim().lowercase() }
+    private fun requestPeriod(p:String)=if(normalizePeriod(p)=="1d")"1D" else normalizePeriod(p)
     private fun cacheKey(symbol:String,period:String)="${symbol.uppercase()}|${normalizePeriod(period)}"
     private fun normalizeTs(t:Long)=if(t>9_999_999_999L)t/1000L else t
     private fun enc(s:String)=URLEncoder.encode(s,"UTF-8")
