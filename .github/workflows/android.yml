@@ -23,10 +23,11 @@ jobs:
           gradle-version: 8.10.2
       - run: python3 scripts/patch_v72.py
       - run: python3 scripts/patch_v73_signal_map_ui.py
+      - run: python3 scripts/patch_v74_best_engine.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v73.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v74.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v73.apk
+          path: MH-Analysis-v74.apk
           if-no-files-found: error
