@@ -3,6 +3,7 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,55 +21,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
-      - run: python3 scripts/patch_v31.py
-      - run: python3 scripts/patch_alarm_v31.py
-      - run: python3 scripts/patch_v32.py
-      - run: python3 scripts/patch_v33.py
-      - run: python3 scripts/patch_v34.py
-      - run: python3 scripts/patch_v35.py
-      - run: python3 scripts/patch_v36.py
-      - run: python3 scripts/patch_v37_analysis.py
-      - run: python3 scripts/patch_v37_runtime.py
-      - run: python3 scripts/patch_v38.py
-      - run: python3 scripts/patch_v39.py
-      - run: python3 scripts/patch_v40_video_techniques.py
-      - run: python3 scripts/patch_v41_timeframe_engine.py
-      - run: python3 scripts/patch_v41_fix.py
-      - run: python3 scripts/patch_v42_all_timeframes_chart_levels.py
-      - run: python3 scripts/patch_v43_ui_chart_overlay.py
-      - run: python3 scripts/patch_v44_clean_chart_snapshot.py
-      - run: python3 scripts/patch_v45_lightweight_chart.py
-      - run: python3 scripts/patch_v45_fix.py
-      - run: python3 scripts/patch_v46_light_chart_sr.py
-      - run: python3 scripts/patch_v47_single_signal_live_chart.py
-      - run: python3 scripts/patch_v48_provider_freshness.py
-      - run: python3 scripts/patch_v49_current_map_ui.py
-      - run: python3 scripts/patch_v50_ui_cleanup.py
-      - run: python3 scripts/patch_v51_major_structure.py
-      - run: python3 scripts/patch_v52_confirmed_structure_ob_reason.py
-      - run: python3 scripts/patch_v53_feed_integrity_dynamic_sr.py
-      - run: python3 scripts/patch_v54_oanda_request_fix.py
-      - run: python3 scripts/patch_v55_simple_sr_oanda_exchange.py
-      - run: python3 scripts/patch_v56_key_validation.py
-      - run: python3 scripts/patch_v57_fx_feed_alignment.py
-      - run: python3 scripts/patch_v58_integrate_fcs_module.py
-      - run: python3 scripts/patch_v59_silent_single_key_live_fallback.py
-      - run: python3 scripts/patch_v60_separate_websocket_key.py
-      - run: python3 scripts/patch_v61_native_live_exact_fx.py
-      - run: python3 scripts/patch_v62_official_fcs_chart.py
-      - run: python3 scripts/patch_v63_clean_official_socket_chart.py
-      - run: python3 scripts/patch_v64_tradingview_rest_cache_clean.py
-      - run: python3 scripts/patch_v65_alarm_tick_restore.py
-      - run: python3 scripts/patch_v66_manual_rest_priority.py
-      - run: python3 scripts/patch_v67_previous_day_map.py
-      - run: python3 scripts/patch_v68_native_daily_private_backend.py
-      - run: python3 scripts/patch_v69_sl_tp_reasoning.py
-      - run: python3 scripts/patch_v70_fresh_analysis_resilience.py
-      - run: python3 scripts/patch_v71_timeframe_lifecycle_audit.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v71.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v72.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v71.apk
+          path: MH-Analysis-v72.apk
           if-no-files-found: error
