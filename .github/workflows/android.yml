@@ -27,10 +27,11 @@ jobs:
       - run: python3 scripts/patch_v75_one_call_clean_text.py
       - run: python3 scripts/patch_v75_compat_fix.py
       - run: python3 scripts/patch_v76_adaptive_decision.py
+      - run: python3 scripts/patch_v77_refresh_balance.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v76.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v77.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v76.apk
+          path: MH-Analysis-v77.apk
           if-no-files-found: error
