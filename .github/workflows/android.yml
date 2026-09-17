@@ -63,10 +63,11 @@ jobs:
       - run: python3 scripts/patch_v67_previous_day_map.py
       - run: python3 scripts/patch_v68_native_daily_private_backend.py
       - run: python3 scripts/patch_v69_sl_tp_reasoning.py
+      - run: python3 scripts/patch_v70_fresh_analysis_resilience.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v69.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v70.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v69.apk
+          path: MH-Analysis-v70.apk
           if-no-files-found: error
