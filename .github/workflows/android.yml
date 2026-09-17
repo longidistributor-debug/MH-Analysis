@@ -61,10 +61,11 @@ jobs:
       - run: python3 scripts/patch_v65_alarm_tick_restore.py
       - run: python3 scripts/patch_v66_manual_rest_priority.py
       - run: python3 scripts/patch_v67_previous_day_map.py
+      - run: python3 scripts/patch_v68_native_daily_private_backend.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v67.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v68.apk
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-APK
-          path: MH-Analysis-v67.apk
+          path: MH-Analysis-v68.apk
           if-no-files-found: error
