@@ -81,23 +81,27 @@ object AppUpdater {
                     }
                 }
             } catch (_: Exception) {
-                // Update checks must never interrupt trading analysis.
+                // Update checks never interrupt market analysis.
             } finally {
                 checking.set(false)
             }
         }.start()
     }
 
+    @Suppress("DEPRECATION")
     private fun currentVersionCode(activity: Activity): Long {
         val p = activity.packageManager.getPackageInfo(activity.packageName, 0)
-        return if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else @Suppress("DEPRECATION") p.versionCode.toLong()
+        return if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()
     }
 
     private fun showUpdateDialog(activity: Activity, info: UpdateInfo) {
         if (activity.isFinishing || activity.isDestroyed || dialogVisible) return
         dialogVisible = true
+        val currentName = runCatching {
+            activity.packageManager.getPackageInfo(activity.packageName, 0).versionName ?: "V.01"
+        }.getOrDefault("V.01")
         val msg = buildString {
-            append("Current: V.01\n")
+            append("Current: $currentName\n")
             append("Available: ${info.version}\n\n")
             if (info.notes.isNotBlank()) append(info.notes)
         }
@@ -155,7 +159,7 @@ object AppUpdater {
         val path = prefs.getString(PENDING_APK, null) ?: return false
         val file = File(path)
         if (!file.exists()) {
-            prefs.edit().remove(PENDING_APK).remove(PENDING_VERSION).apply()
+            clearPending(activity)
             return false
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) return false
@@ -176,6 +180,7 @@ object AppUpdater {
     private fun launchInstaller(activity: Activity, apk: File) {
         try {
             val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.updates", apk)
+            clearPending(activity)
             val i = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -185,6 +190,13 @@ object AppUpdater {
         } catch (e: Exception) {
             Toast.makeText(activity, "Unable to open Android installer: ${e.message}", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun clearPending(activity: Activity) {
+        activity.getSharedPreferences(PREFS, Activity.MODE_PRIVATE).edit()
+            .remove(PENDING_APK)
+            .remove(PENDING_VERSION)
+            .apply()
     }
 
     private fun sha256(file: File): String {
