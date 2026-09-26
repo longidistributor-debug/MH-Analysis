@@ -1,0 +1,9 @@
+{
+  "version": "V.01",
+  "version_code": 33,
+  "mandatory": true,
+  "download_url": "https://raw.githubusercontent.com/longidistributor-debug/MH-Analysis/android-update-channel/MH-Analysis.apk",
+  "sha256": "de5a9e2d22e9d3188f5b6582878f3fd8b5f648d9ec908ff20b9e30bdef18d928",
+  "notes": "MH Analysis V.01 update is available.",
+  "published_at": "2026-09-26"
+}
