@@ -20,24 +20,33 @@ f.write_text(s)
 
 m=Path('app/src/main/java/com/mh/analysis/MainActivityV29.kt')
 x=m.read_text()
+# Force-remove the exact auto-socket paths even if an earlier patch failed to match formatting.
+x=x.replace('LiveSocketHub.addListener(this)','LiveSocketHub.stop()')
+x=x.replace('savedHistoryKey().takeIf{it.isNotBlank()}?.let{LiveSocketHub.start(this,it)}','LiveSocketHub.stop()')
+x=x.replace('updateKeyUi();LiveSocketHub.start(this,x)','updateKeyUi();LiveSocketHub.stop()')
 x=x.replace('MH - V.04','MH - V.05')
 x=x.replace('FCS CHART • FRESH ANALYSIS USES EXACTLY 3 FCS REST CALLS','FCS CHART • FRESH ANALYSIS USES 2 FCS REST CALLS')
 x=x.replace('3 calls per manual analysis • READY','2 calls per manual analysis • READY')
 x=x.replace('next 3-call pack in ${left}s','next analysis in ${left}s')
 x=x.replace('MANUAL 3-CALL PACK COOLDOWN','MANUAL ANALYSIS COOLDOWN')
-x=x.replace('Next fresh analysis available in ${wait}s.\\nNo extra FCS REST call was sent.','Next fresh analysis available in ${wait}s.\\nNo extra FCS REST call was sent.')
 x=x.replace('1/3 selected timeframe • 2/3 true HTF • 3/3 execution snapshot…','1/2 selected timeframe • 2/2 true HTF…')
 x=x.replace('FCS PROVIDER WINDOW ACTIVE\\n${partial.coerceAtLeast(1)} request(s) were accepted in this pack. Next fresh 3-call pack in ${localWait}s.','FCS PROVIDER WINDOW ACTIVE\\n${partial.coerceAtLeast(1)} request(s) were accepted. Next fresh analysis in ${localWait}s.')
 x=x.replace('FCS CHART • PRESS NEW ANALYZE / RE-EVALUATE FOR FRESH 3-CALL ANALYSIS','FCS CHART • PRESS NEW ANALYZE / RE-EVALUATE FOR FRESH 2-CALL ANALYSIS')
+if 'savedHistoryKey().takeIf{it.isNotBlank()}?.let{LiveSocketHub.start' in x: raise SystemExit('V05 failed to remove main auto socket start')
+if 'updateKeyUi();LiveSocketHub.start(this,x)' in x: raise SystemExit('V05 failed to remove key-save socket start')
 m.write_text(x)
 
-# Update floating overlay text/version behavior only; it remains cache/manual-pack based.
+# Floating overlay must also never auto-open an FCS socket.
 o=Path('app/src/main/java/com/mh/analysis/OverlayService.kt')
-y=o.read_text().replace('Fresh analysis unavailable:', 'Fresh analysis unavailable:')
+y=o.read_text()
+y=y.replace('startFg();createBubble();LiveSocketHub.addListener(this)','startFg();createBubble();LiveSocketHub.stop()')
+y=y.replace('prefs.getString("api_key","")?.trim().orEmpty().takeIf{it.isNotBlank()}?.let{LiveSocketHub.start(this,it)}','LiveSocketHub.stop()')
+y=y.replace('LiveSocketHub.addListener(this)','LiveSocketHub.stop()')
+if 'takeIf{it.isNotBlank()}?.let{LiveSocketHub.start' in y: raise SystemExit('V05 failed to remove overlay auto socket start')
 o.write_text(y)
 
 b=Path('app/build.gradle.kts')
 z=b.read_text().replace('versionCode = 36','versionCode = 37').replace('versionName = "V.04"','versionName = "V.05"')
 b.write_text(z)
 
-print('V.05 reliable two-call FCS analysis pack applied')
+print('V.05 reliable two-call FCS analysis pack + forced socket isolation applied')
