@@ -38,9 +38,9 @@ jobs:
       - run: python3 scripts/patch_v04_isolate_manual_pack.py
       - run: python3 scripts/patch_v05_two_call_pack.py
       - run: python3 scripts/patch_v06_ui_support.py
-      - run: python3 scripts/patch_v07_synced_cooldown_ui.py
       - name: Validate V.06 preserved analysis stack
         run: python3 scripts/validate_v06_ui_stack.py
+      - run: python3 scripts/patch_v07_synced_cooldown_ui.py
       - name: Validate V.07 synchronized timer UI
         run: python3 scripts/validate_v07_ui.py
 
