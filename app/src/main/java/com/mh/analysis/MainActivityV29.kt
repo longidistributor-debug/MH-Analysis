@@ -11,10 +11,10 @@ import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
-import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.*
+import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
@@ -52,6 +52,7 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
         super.onResume()
         LiveSocketHub.addListener(this)
         savedHistoryKey().takeIf{it.isNotBlank()}?.let{LiveSocketHub.start(this,it)}
+        updateCallLabel()
     }
 
     override fun onPause(){
@@ -59,13 +60,14 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
         super.onPause()
     }
 
-    override fun onSocketState(state:String){ /* intentionally not shown in the product UI */ }
+    override fun onSocketState(state:String){ /* socket state stays out of the product UI */ }
 
     override fun onLiveCandle(liveSymbol:String,timeframe:String,candle:Candle){
         if(liveSymbol!=symbol||timeframe!=period)return
         runOnUiThread{
             val live=FcsClient.freshSnapshot(symbol,period,60,2200)?:return@runOnUiThread
             candles=live
+            renderFcsChart(live)
             if(analysisContext==contextKey()){
                 val ev=LiveSetupStore.evaluate(this,symbol,period,live)
                 if(ev.changed)showSetup(ev.setup,"LIVE CONDITION UPDATED",ev.reason)
@@ -77,8 +79,13 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
         val root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(14),dp(18),dp(28));setBackgroundColor(Color.BLACK)}
         root.addView(txt("بِسْمِ ٱللَّٰهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ",21f,true).apply{gravity=Gravity.CENTER;textAlignment=View.TEXT_ALIGNMENT_CENTER;setPadding(0,dp(3),0,dp(14))},LinearLayout.LayoutParams(-1,-2))
         val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
-        header.addView(TextView(this).apply{text="MS";gravity=Gravity.CENTER;textSize=22f;setTextColor(Color.WHITE);setTypeface(typeface,Typeface.BOLD);background=round(Color.BLACK,18f,Color.WHITE)},LinearLayout.LayoutParams(dp(64),dp(64)))
-        header.addView(LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0);addView(txt("MH ANALYSIS",26f,true));addView(txt("Live Market Structure Engine",11f,false,Color.LTGRAY));addView(txt("MS • V.01 • 3-CALL TRUE HTF ENGINE",10f,true));addView(txt("◉ WhatsApp  +92 343 4824609",11f,false,Color.LTGRAY))},LinearLayout.LayoutParams(0,-2,1f))
+        header.addView(ImageView(this).apply{setImageResource(R.drawable.mh_logo_pc);scaleType=ImageView.ScaleType.CENTER_INSIDE;setPadding(dp(3),dp(3),dp(3),dp(3))},LinearLayout.LayoutParams(dp(64),dp(64)))
+        header.addView(LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0)
+            addView(txt("MH ANALYSIS",26f,true))
+            addView(txt("Live Market Structure Engine",11f,false,Color.LTGRAY))
+            addView(txt("MH - V.02",10f,true))
+        },LinearLayout.LayoutParams(0,-2,1f))
         root.addView(header)
 
         val keyCard=card();historyStatus=txt("",12f,true,Color.LTGRAY);keyCard.addView(historyStatus)
@@ -100,16 +107,15 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
             override fun onNothingSelected(p:AdapterView<*>?){}
         }
 
-        root.addView(section("LIVE MARKET CHART"));val cc=card();chart=WebView(this).apply{
-            settings.javaScriptEnabled=true;settings.domStorageEnabled=true;settings.mediaPlaybackRequiresUserGesture=false
-            CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(this,true)
+        root.addView(section("FCS MARKET CHART"));val cc=card();chart=WebView(this).apply{
+            settings.javaScriptEnabled=true;settings.domStorageEnabled=true
             setBackgroundColor(Color.rgb(19,23,34));webViewClient=object:WebViewClient(){override fun onPageFinished(v:WebView?,u:String?){chartReady=true;switchVisibleChart()}}
-            val html=assets.open("tradingview_live.html").bufferedReader().use{it.readText()};loadDataWithBaseURL("https://s3.tradingview.com/",html,"text/html","UTF-8",null)
+            val html=assets.open("fcs_chart.html").bufferedReader().use{it.readText()};loadDataWithBaseURL(null,html,"text/html","UTF-8",null)
         };cc.addView(chart,LinearLayout.LayoutParams(-1,dp(560)));root.addView(cc)
 
-        root.addView(section("SIGNAL CONTROL"));val sc=card();calls=txt("API calls: ${usage()}/500 • 3 per manual analysis",11f,true,Color.LTGRAY);sc.addView(calls)
+        root.addView(section("SIGNAL CONTROL"));val sc=card();calls=txt("",11f,true,Color.LTGRAY);sc.addView(calls);updateCallLabel()
         sc.addView(actionButton("NEW ANALYZE / RE-EVALUATE",true){analyzeNow()},LinearLayout.LayoutParams(-1,dp(54)).apply{topMargin=dp(10)})
-        status=txt("$symbol • $period\nTRADINGVIEW LIVE • MANUAL ANALYSIS USES 3 FCS CALLS",12f,false).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)};sc.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});root.addView(sc)
+        status=txt("$symbol • $period\nFCS CHART • FRESH ANALYSIS USES EXACTLY 3 FCS REST CALLS",12f,false).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)};sc.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});root.addView(sc)
 
         root.addView(section("FLOATING"));val fc=card();fc.addView(Button(this).apply{text="ENABLE MS LIVE FLOAT";setTextColor(Color.WHITE);background=round(Color.rgb(25,25,25),12f,Color.GRAY);setOnClickListener{enableFloat()}},LinearLayout.LayoutParams(-1,dp(52)));root.addView(fc)
         return ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.BLACK);addView(root)}
@@ -126,19 +132,30 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
         analysisContext=null
         lastUnified=null
         candles=emptyList()
-        if(::status.isInitialized)status.text="$symbol • $period\nMARKET CHANGED • NO FCS REST CALL USED • PRESS NEW ANALYZE / RE-EVALUATE"
+        if(::status.isInitialized)status.text="$symbol • $period\nMARKET CHANGED • 0 FCS REST CALLS USED • PRESS NEW ANALYZE / RE-EVALUATE"
         if(chartReady)chart.evaluateJavascript("clearSignalCard()",null)
     }
 
     private fun switchVisibleChart(){
         pairLabel.text="$symbol • $period"
-        if(chartReady)chart.evaluateJavascript("clearSignalCard();loadTradingView(${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null)
-        if(analysisContext!=contextKey()&&::status.isInitialized)status.text="$symbol • $period\nTRADINGVIEW LIVE • PRESS NEW ANALYZE / RE-EVALUATE FOR FRESH 3-CALL ANALYSIS"
+        val cached=FcsClient.peek(symbol,period,300).orEmpty()
+        if(cached.isNotEmpty()){candles=cached;renderFcsChart(cached)}
+        else if(chartReady)chart.evaluateJavascript("setEmptyMarket(${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null)
+        if(analysisContext!=contextKey()&&::status.isInitialized)status.text="$symbol • $period\nFCS CHART • PRESS NEW ANALYZE / RE-EVALUATE FOR FRESH 3-CALL ANALYSIS"
+        updateCallLabel()
+    }
+
+    private fun updateCallLabel(){
+        if(!::calls.isInitialized)return
+        val left=FcsClient.manualCooldownSeconds()
+        calls.text=if(left>0)"FCS calls: ${usage()}/500 • next 3-call pack in ${left}s" else "FCS calls: ${usage()}/500 • 3 calls per manual analysis • READY"
     }
 
     private fun analyzeNow(){
         val key=savedHistoryKey();if(key.isBlank()){status.text="SAVE ANALYSIS ACCESS KEY ONCE";return}
         if(busy){status.text="MANUAL ANALYSIS IS ALREADY RUNNING FOR $symbol • $period";return}
+        val wait=FcsClient.manualCooldownSeconds()
+        if(wait>0){status.text="MANUAL 3-CALL PACK COOLDOWN\nNext fresh analysis available in ${wait}s.\nNo extra FCS REST call was sent.";updateCallLabel();return}
         val token=++analyzeGeneration;val reqSymbol=symbol;val reqPeriod=period;val reqContext="$reqSymbol|$reqPeriod"
         busy=true;status.text="NEW ANALYZE / RE-EVALUATE\n1/3 selected timeframe • 2/3 true HTF • 3/3 execution snapshot…"
         thread{
@@ -148,15 +165,20 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
                 runOnUiThread{
                     if(token!=analyzeGeneration||reqSymbol!=symbol||reqPeriod!=period)return@runOnUiThread
                     busy=false
-                    if(pack.credits>0)addUsage(pack.credits);calls.text="API calls: ${usage()}/500 • 3 per manual analysis"
+                    if(pack.credits>0)addUsage(pack.credits);updateCallLabel()
                     candles=pack.selected;analysisContext=reqContext;lastUnified=result
+                    renderFcsChart(pack.selected)
                     performFreshAnalysis(result)
                 }
             }catch(e:Exception){
                 runOnUiThread{
                     if(token!=analyzeGeneration)return@runOnUiThread
-                    busy=false
-                    status.text="3-CALL ANALYSIS UNAVAILABLE\n${e.message}\nNo stale signal was generated. TradingView remains live."
+                    busy=false;updateCallLabel()
+                    val msg=e.message.orEmpty()
+                    val providerRate=msg.contains("rate",true)||msg.contains("too many",true)||msg.contains("limit",true)
+                    status.text=if(providerRate)
+                        "FCS PROVIDER COOLDOWN\nProvider still has requests inside its rolling 60-second window. Wait for the countdown, then press NEW ANALYZE / RE-EVALUATE.\nNo stale signal was generated."
+                    else "3-CALL ANALYSIS UNAVAILABLE\n$msg\nNo stale signal was generated. Cached/live FCS chart remains available."
                     showSignalCard(LiveSetupStore.load(this,symbol,period))
                 }
             }
@@ -200,6 +222,13 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
     private fun marketContext():String{
         val u=lastUnified?:return "TRUE HTF / EXECUTION / CALIBRATION • waiting for manual analysis"
         return "${u.htfSummary}\n${u.executionSummary}\n${u.calibrationSummary}"
+    }
+
+    private fun renderFcsChart(data:List<Candle>){
+        if(!chartReady)return
+        val arr=JSONArray()
+        data.takeLast(180).forEach{c->arr.put(JSONObject().put("t",if(c.t>9_999_999_999L)c.t/1000L else c.t).put("o",c.o).put("h",c.h).put("l",c.l).put("c",c.c))}
+        chart.evaluateJavascript("setMarketData(${JSONObject.quote(symbol)},${JSONObject.quote(period)},${JSONObject.quote(arr.toString())})",null)
     }
 
     private fun showSignalCard(a:ActiveSignal?){

@@ -11,8 +11,8 @@ android {
         applicationId = "com.mh.analysis"
         minSdk = 26
         targetSdk = 33
-        versionCode = 33
-        versionName = "V.01"
+        versionCode = 34
+        versionName = "V.02"
     }
 
     val signingStoreFile = System.getenv("MH_SIGNING_STORE_FILE")

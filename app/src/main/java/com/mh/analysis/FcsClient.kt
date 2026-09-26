@@ -9,7 +9,6 @@ import java.net.URLEncoder
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
-import java.util.ArrayDeque
 import kotlin.math.max
 
 object FcsClient {
@@ -27,15 +26,15 @@ object FcsClient {
 
     private data class Cache(val at:Long,val candles:List<Candle>,val credits:Int)
     private val cache=mutableMapOf<String,Cache>()
-    private val requestTimes=ArrayDeque<Long>()
     private val lastPersist=mutableMapOf<String,Long>()
     private val previousDayCache=mutableMapOf<String,Pair<String,PreviousDayRange>>()
     private var appContext:Context?=null
     private var restored=false
-    private const val MAX_REQUESTS_PER_WINDOW=3
-    private const val REQUEST_WINDOW_MS=61_000L
+    private const val MANUAL_PACK_COOLDOWN_MS=65_000L
     private const val DISK_LIMIT=2200
     private const val SAFE_HISTORY_LENGTH=300
+    private const val MANUAL_PREFS="mh_manual_pack_v02"
+    private const val NEXT_MANUAL_AT="next_manual_at"
     private val periods=listOf("1m","5m","15m","30m","1h","2h","4h")
     private val symbols=listOf("XAUUSD","BTCUSDT")
 
@@ -110,23 +109,39 @@ object FcsClient {
         return x
     }
 
+    @Synchronized fun manualCooldownSeconds():Int{
+        val p=appContext?.getSharedPreferences(MANUAL_PREFS,Context.MODE_PRIVATE)?:return 0
+        val remaining=(p.getLong(NEXT_MANUAL_AT,0L)-System.currentTimeMillis()).coerceAtLeast(0L)
+        return if(remaining<=0L)0 else ((remaining+999L)/1000L).toInt()
+    }
+
+    private fun reserveManualPack(){
+        val ctx=appContext?:throw IllegalStateException("FCS client is not initialized")
+        val p=ctx.getSharedPreferences(MANUAL_PREFS,Context.MODE_PRIVATE)
+        val now=System.currentTimeMillis();val next=p.getLong(NEXT_MANUAL_AT,0L)
+        if(next>now){
+            val seconds=((next-now+999L)/1000L).toInt()
+            throw IllegalStateException("Next 3-call manual analysis pack is available in $seconds sec.")
+        }
+        // Reserve before network I/O. This survives app restart and prevents accidental
+        // duplicate packs from breaking the provider's rolling 3-requests/minute plan.
+        p.edit().putLong(NEXT_MANUAL_AT,now+MANUAL_PACK_COOLDOWN_MS).commit()
+    }
+
     /**
-     * Manual NEW ANALYZE / RE-EVALUATE contract:
-     * exactly three REST requests in one 61-second request window:
-     * 1) selected timeframe history, 2) true provider higher-timeframe history,
-     * 3) latest execution snapshot. All indicators are calculated locally.
+     * V.02 contract: fresh FCS REST traffic is exclusive to this method.
+     * One manual analysis = exactly 3 provider calls:
+     * 1) selected timeframe history, 2) true provider HTF history,
+     * 3) latest execution snapshot. Everything else is local/cache/socket/calendar.
      */
     @Synchronized fun manualAnalysisPack(accessKey:String,symbol:String,period:String):ManualAnalysisPack{
         val sym=symbol.uppercase();val tf=normalizePeriod(period);val htf=higherTimeframe(tf)
-        if(!canRequestBatch(3))throw IllegalStateException("3-call analysis window is still cooling down. Try again after the current 61-second window completes.")
+        reserveManualPack()
 
         var credits=0
-        val selectedResult=try{fetchMarket(sym,accessKey,tf,SAFE_HISTORY_LENGTH)}finally{noteRequest()}
-        credits+=selectedResult.second
-        val htfResult=try{fetchMarket(sym,accessKey,htf,SAFE_HISTORY_LENGTH)}finally{noteRequest()}
-        credits+=htfResult.second
-        val quoteResult=try{fetchLatest(sym,accessKey)}finally{noteRequest()}
-        credits+=quoteResult.second
+        val selectedResult=fetchMarket(sym,accessKey,tf,SAFE_HISTORY_LENGTH);credits+=selectedResult.second
+        val htfResult=fetchMarket(sym,accessKey,htf,SAFE_HISTORY_LENGTH);credits+=htfResult.second
+        val quoteResult=fetchLatest(sym,accessKey);credits+=quoteResult.second
 
         val selected=selectedResult.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
         val higher=htfResult.first.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
@@ -137,19 +152,12 @@ object FcsClient {
         return ManualAnalysisPack(selected.takeLast(SAFE_HISTORY_LENGTH),higher.takeLast(SAFE_HISTORY_LENGTH),htf,quoteResult.first,credits)
     }
 
+    /** V.02: legacy helpers are cache-only so they can never become hidden FCS REST calls. */
     @Synchronized fun seedForPeriod(accessKey:String,symbol:String,period:String,force:Boolean=false):Pair<List<Candle>,Int>{
         val sym=symbol.uppercase();val tf=normalizePeriod(period)
         val current=cache[cacheKey(sym,tf)]?.candles.orEmpty()
-        if(current.size>=100&&!force)return current.takeLast(SAFE_HISTORY_LENGTH) to 0
-        if(!canRequestNow()){
-            if(!force&&current.isNotEmpty())return current.takeLast(SAFE_HISTORY_LENGTH) to 0
-            throw IllegalStateException("Fresh market snapshot is temporarily rate-limited. Try NEW ANALYZE again shortly; stale candles were not used.")
-        }
-        val(out,credits)=try{fetchMarket(sym,accessKey,tf,SAFE_HISTORY_LENGTH)}finally{noteRequest()}
-        val clean=out.sortedBy{normalizeTs(it.t)}.map{it.copy(t=normalizeTs(it.t))}
-        if(clean.size<100)throw IllegalStateException("Not enough fresh $sym $tf candles were returned for reliable analysis.")
-        putCache(sym,tf,clean,true)
-        return clean.takeLast(SAFE_HISTORY_LENGTH) to credits
+        if(current.isNotEmpty())return current.takeLast(SAFE_HISTORY_LENGTH) to 0
+        throw IllegalStateException("Fresh FCS history is fetched only by NEW ANALYZE / RE-EVALUATE in V.02.")
     }
 
     @Synchronized fun previousDayRange(accessKey:String,symbol:String):Pair<PreviousDayRange?,Int>{
@@ -165,26 +173,14 @@ object FcsClient {
                 return r to 0
             }
         }
-        if(!canRequestNow())return null to 0
-        val(out,credits)=try{fetchMarket(sym,accessKey,"1D",7)}finally{noteRequest()}
-        val todayDate=LocalDate.now(ZoneOffset.UTC)
-        val previous=out.sortedBy{normalizeTs(it.t)}.filter{
-            val d=Instant.ofEpochSecond(normalizeTs(it.t)).atZone(ZoneOffset.UTC).toLocalDate()
-            d<todayDate
-        }.lastOrNull() ?: return null to credits
-        val r=PreviousDayRange(previous.h,previous.l,normalizeTs(previous.t))
-        previousDayCache[sym]=today to r
-        p?.edit()?.putString("$sym|$today",JSONObject().put("h",r.high).put("l",r.low).put("t",r.candleTime).toString())?.apply()
-        return r to credits
+        return null to 0
     }
 
     @Synchronized fun history(accessKey:String,symbol:String,period:String,length:Int=220,force:Boolean=false):Pair<List<Candle>,Int>{
         val requested=length.coerceAtMost(SAFE_HISTORY_LENGTH)
         val hit=cache[cacheKey(symbol,period)]?.candles?.takeLast(requested)
-        if(!hit.isNullOrEmpty()&&hit.size>=100&&!force)return hit to 0
-        val(out,credits)=seedForPeriod(accessKey,symbol,period,force)
-        if(out.size<60)throw IllegalStateException("$symbol $period history is still building.")
-        return out.takeLast(requested) to credits
+        if(!hit.isNullOrEmpty())return hit to 0
+        throw IllegalStateException("No cached FCS candles yet. Run NEW ANALYZE / RE-EVALUATE once.")
     }
 
     private fun putCache(symbol:String,period:String,data:List<Candle>,persist:Boolean){
@@ -199,11 +195,6 @@ object FcsClient {
         data.takeLast(DISK_LIMIT).forEach{arr.put(JSONObject().put("t",it.t).put("o",it.o).put("h",it.h).put("l",it.l).put("c",it.c).put("v",it.v))}
         ctx.getSharedPreferences("mh_candle_cache_v22",Context.MODE_PRIVATE).edit().putString(key,arr.toString()).apply()
     }
-
-    private fun trimWindow(){val now=System.currentTimeMillis();while(requestTimes.isNotEmpty()&&now-requestTimes.first()>=REQUEST_WINDOW_MS)requestTimes.removeFirst()}
-    private fun canRequestNow():Boolean{trimWindow();return requestTimes.size<MAX_REQUESTS_PER_WINDOW}
-    private fun canRequestBatch(n:Int):Boolean{trimWindow();return requestTimes.size+n<=MAX_REQUESTS_PER_WINDOW}
-    private fun noteRequest(){requestTimes.addLast(System.currentTimeMillis());trimWindow()}
 
     private fun fetchMarket(symbol:String,key:String,period:String,length:Int):Pair<List<Candle>,Int>{
         return when(symbol){"XAUUSD"->fetch("forex",key,"XAUUSD",period,length,"commodity");else->fetch("crypto",key,"BINANCE:BTCUSDT",period,length,"crypto")}
