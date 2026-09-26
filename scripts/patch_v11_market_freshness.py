@@ -82,14 +82,15 @@ x=x[:start]+new_exec+x[end:]
 u.write_text(x)
 
 m=Path('app/src/main/java/com/mh/analysis/MainActivityV29.kt')
-y=m.read_text()
-y=y.replace('MH - V.10','MH - V.11')
-# V.09 used action-style LEVELS OFF/ON labels. V.11 shows the current state explicitly.
-y=y.replace('LEVELS OFF','LEVELS: ON')
-y=y.replace('LEVELS ON','LEVELS: OFF')
-# The replacements above can cross-replace depending on source order; normalize known state strings.
-y=y.replace('LEVELS: OFF: ON','LEVELS: ON').replace('LEVELS: ON: OFF','LEVELS: OFF')
+y=m.read_text().replace('MH - V.10','MH - V.11')
 m.write_text(y)
+
+# V.09's chart button showed the next action (LEVELS ON/OFF). V.11 shows current state.
+h=Path('app/src/main/assets/fcs_chart.html')
+z=h.read_text()
+z=z.replace('>LEVELS ON</div>','>LEVELS: ON</div>')
+z=z.replace("b.textContent=showLevels?'LEVELS ON':'LEVELS OFF'","b.textContent=showLevels?'LEVELS: ON':'LEVELS: OFF'")
+h.write_text(z)
 
 b=Path('app/build.gradle.kts')
 g=b.read_text().replace('versionCode = 42','versionCode = 43').replace('versionName = "V.10"','versionName = "V.11"')
