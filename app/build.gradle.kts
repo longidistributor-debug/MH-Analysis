@@ -15,8 +15,37 @@ android {
         versionName = "V.01"
     }
 
+    val signingStoreFile = System.getenv("MH_SIGNING_STORE_FILE")
+    val signingStorePassword = System.getenv("MH_ANDROID_STORE_PASSWORD")
+    val signingKeyAlias = System.getenv("MH_ANDROID_KEY_ALIAS")
+    val signingKeyPassword = System.getenv("MH_ANDROID_KEY_PASSWORD")
+    val hasReleaseSigning = !signingStoreFile.isNullOrBlank() &&
+        !signingStorePassword.isNullOrBlank() &&
+        !signingKeyAlias.isNullOrBlank() &&
+        !signingKeyPassword.isNullOrBlank()
+
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("mhRelease") {
+                storeFile = file(signingStoreFile!!)
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
+    }
+
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("mhRelease")
+            }
+        }
     }
 
     compileOptions {
