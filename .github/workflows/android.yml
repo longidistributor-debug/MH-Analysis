@@ -1,7 +1,7 @@
 name: Build MH Analysis V.01 APK
 on:
   push:
-    branches: [ main, v01-updater ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -15,6 +15,10 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      MH_ANDROID_KEYSTORE_B64: ${{ secrets.MH_ANDROID_KEYSTORE_B64 }}
+      MH_ANDROID_STORE_PASSWORD: ${{ secrets.MH_ANDROID_STORE_PASSWORD }}
+      MH_ANDROID_KEY_ALIAS: ${{ secrets.MH_ANDROID_KEY_ALIAS }}
+      MH_ANDROID_KEY_PASSWORD: ${{ secrets.MH_ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,15 +34,63 @@ jobs:
           gradle-version: 8.10.2
       - run: python3 scripts/patch_v01_compile_fix.py
       - run: python3 scripts/patch_v01_calendar_news.py
-      - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-V.01.apk
-      - uses: actions/upload-artifact@v4
+
+      - name: Validate permanent signing secrets
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MH_ANDROID_KEYSTORE_B64" || { echo 'Missing MH_ANDROID_KEYSTORE_B64'; exit 1; }
+          test -n "$MH_ANDROID_STORE_PASSWORD" || { echo 'Missing MH_ANDROID_STORE_PASSWORD'; exit 1; }
+          test -n "$MH_ANDROID_KEY_ALIAS" || { echo 'Missing MH_ANDROID_KEY_ALIAS'; exit 1; }
+          test -n "$MH_ANDROID_KEY_PASSWORD" || { echo 'Missing MH_ANDROID_KEY_PASSWORD'; exit 1; }
+
+      - name: Prepare permanent release keystore
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYSTORE="$RUNNER_TEMP/mh-analysis-release.jks"
+          printf '%s' "$MH_ANDROID_KEYSTORE_B64" | base64 --decode > "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+          echo "MH_SIGNING_STORE_FILE=$KEYSTORE" >> "$GITHUB_ENV"
+          keytool -list -keystore "$KEYSTORE" -storepass "$MH_ANDROID_STORE_PASSWORD" -alias "$MH_ANDROID_KEY_ALIAS" >/dev/null
+
+      - name: Build debug validation APK
+        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+        run: gradle --no-daemon assembleDebug
+
+      - name: Upload debug validation APK
+        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+        uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.01-APK
+          name: MH-Analysis-V.01-Debug-Validation
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Build permanently signed release APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: gradle --no-daemon assembleRelease
+
+      - name: Verify APK signature and certificate
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -f "$APK"
+          /usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --verbose --print-certs "$APK"
+          cp "$APK" MH-Analysis-V.01.apk
+
+      - name: Upload signed V.01 artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.01-Signed-APK
           path: MH-Analysis-V.01.apk
           if-no-files-found: error
 
-      - name: Publish mobile update channel
+      - name: Publish signed mobile update channel
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
@@ -47,6 +99,8 @@ jobs:
           VERSION_CODE=$(grep -E 'versionCode\s*=' app/build.gradle.kts | head -1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')
           HASH=$(sha256sum MH-Analysis-V.01.apk | awk '{print $1}')
           DATE=$(date -u +%F)
+          CERT_SHA256=$(/usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --print-certs MH-Analysis-V.01.apk | sed -n 's/Signer #1 certificate SHA-256 digest: //p' | head -1)
+          test -n "$CERT_SHA256"
           cat > "$RUNNER_TEMP/update.json" <<EOF
           {
             "version": "$VERSION",
@@ -54,6 +108,7 @@ jobs:
             "mandatory": true,
             "download_url": "https://raw.githubusercontent.com/longidistributor-debug/MH-Analysis/android-update-channel/MH-Analysis.apk",
             "sha256": "$HASH",
+            "signing_cert_sha256": "$CERT_SHA256",
             "notes": "MH Analysis $VERSION update is available.",
             "published_at": "$DATE"
           }
@@ -69,5 +124,5 @@ jobs:
           cp "$RUNNER_TEMP/update.json" ./update.json
           cp "$RUNNER_TEMP/VERSION" ./VERSION
           git add MH-Analysis.apk update.json VERSION
-          git commit -m "MH Analysis $VERSION Android update channel"
+          git commit -m "MH Analysis $VERSION signed Android update channel"
           git push --force origin HEAD:android-update-channel
