@@ -1,7 +1,7 @@
 name: Build MH Analysis V.01 APK
 on:
   push:
-    branches: [ main, v01-three-call-analysis ]
+    branches: [ main, v01-calendar-news ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -24,6 +24,7 @@ jobs:
         with:
           gradle-version: 8.10.2
       - run: python3 scripts/patch_v01_compile_fix.py
+      - run: python3 scripts/patch_v01_calendar_news.py
       - run: gradle --no-daemon assembleDebug
       - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-V.01.apk
       - uses: actions/upload-artifact@v4
