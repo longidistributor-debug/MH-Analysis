@@ -17,6 +17,7 @@ required_u=[
     'VideoTechniqueEngine.analyzeOrEnhance',
     'AdvancedMarketEngine.assess',
     'AdaptiveDecisionEngine.refine',
+    'ProQualityEngine.assess',
     'calibration(context,symbol,timeframe,current)'
 ]
 for q in required_u:
@@ -28,7 +29,7 @@ manual=f[f.index('@Synchronized fun manualAnalysisPack'):f.index('/** V.02: lega
 assert manual.count('fetchMarket(')==2, 'manual pack must contain exactly two provider history calls'
 assert 'fetchLatest(' not in manual, 'manual pack must not restore unreliable third latest call'
 
-for q in ['MH - V.11','WhatsApp Support 24/7','ProQualityEngine']:
+for q in ['MH - V.11','WhatsApp Support 24/7']:
     assert q in m, f'missing V11 UI/preserved marker: {q}'
 for q in ['LEVELS: ON','LEVELS: OFF','showLevels=true','toggleLevels()']:
     assert q in h, f'missing V11 chart state marker: {q}'
