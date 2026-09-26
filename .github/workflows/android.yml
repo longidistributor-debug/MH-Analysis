@@ -1,6 +1,8 @@
-name: Build MH Analysis APK
+name: Build MH Analysis V.01 APK
 on:
   push:
+    branches: [ main, v01-three-call-analysis ]
+  pull_request:
     branches: [ main ]
   workflow_dispatch:
 
@@ -21,18 +23,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
-      - run: python3 scripts/patch_v72.py
-      - run: python3 scripts/patch_v73_signal_map_ui.py
-      - run: python3 scripts/patch_v74_best_engine.py
-      - run: python3 scripts/patch_v75_one_call_clean_text.py
-      - run: python3 scripts/patch_v75_compat_fix.py
-      - run: python3 scripts/patch_v76_adaptive_decision.py
-      - run: python3 scripts/patch_v77_refresh_balance.py
-      - run: python3 scripts/patch_v78_best_setup_ranking.py
+      - run: python3 scripts/patch_v01_compile_fix.py
       - run: gradle --no-daemon assembleDebug
-      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-v78.apk
+      - run: cp app/build/outputs/apk/debug/app-debug.apk MH-Analysis-V.01.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-APK
-          path: MH-Analysis-v78.apk
+          name: MH-Analysis-V.01-APK
+          path: MH-Analysis-V.01.apk
           if-no-files-found: error
