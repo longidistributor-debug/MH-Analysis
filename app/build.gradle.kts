@@ -28,4 +28,5 @@ android {
 
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.core:core:1.13.1")
 }
