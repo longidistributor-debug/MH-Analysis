@@ -1,4 +1,4 @@
-name: Build MH Analysis V.03 APK
+name: Build MH Analysis V.04 APK
 on:
   push:
     branches: [ main ]
@@ -35,8 +35,21 @@ jobs:
       - run: python3 scripts/patch_v01_compile_fix.py
       - run: python3 scripts/patch_v01_calendar_news.py
       - run: python3 scripts/patch_v03_manual_pack_fix.py
-      - name: Validate V.03 analysis architecture
-        run: python3 scripts/validate_v03_invariants.py
+      - run: python3 scripts/patch_v04_isolate_manual_pack.py
+      - name: Validate V.04 manual-pack isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'versionName = "V.04"' app/build.gradle.kts
+          grep -q 'versionCode = 36' app/build.gradle.kts
+          grep -q 'MH - V.04' app/src/main/java/com/mh/analysis/MainActivityV29.kt
+          ! grep -q 'savedHistoryKey().takeIf{it.isNotBlank()}?.let{LiveSocketHub.start' app/src/main/java/com/mh/analysis/MainActivityV29.kt
+          ! grep -q 'takeIf{it.isNotBlank()}?.let{LiveSocketHub.start' app/src/main/java/com/mh/analysis/OverlayService.kt
+          grep -q 'val selectedResult=fetchMarket' app/src/main/java/com/mh/analysis/FcsClient.kt
+          grep -q 'val htfResult=fetchMarket' app/src/main/java/com/mh/analysis/FcsClient.kt
+          grep -q 'val quoteResult=fetchLatest' app/src/main/java/com/mh/analysis/FcsClient.kt
+          grep -q 'UnifiedAnalysisEngine.analyze' app/src/main/java/com/mh/analysis/MainActivityV29.kt
+          grep -q 'fcs_chart.html' app/src/main/java/com/mh/analysis/MainActivityV29.kt
 
       - name: Use canonical PC MH logo
         shell: bash
@@ -71,11 +84,11 @@ jobs:
         if: github.event_name != 'push' || github.ref != 'refs/heads/main'
         run: gradle --no-daemon assembleDebug
 
-      - name: Upload V.03 debug validation APK
+      - name: Upload V.04 debug validation APK
         if: github.event_name != 'push' || github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.03-Debug-Validation
+          name: MH-Analysis-V.04-Debug-Validation
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
@@ -91,14 +104,14 @@ jobs:
           APK=app/build/outputs/apk/release/app-release.apk
           test -f "$APK"
           /usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --verbose --print-certs "$APK"
-          cp "$APK" MH-Analysis-V.03.apk
+          cp "$APK" MH-Analysis-V.04.apk
 
-      - name: Upload signed V.03 artifact
+      - name: Upload signed V.04 artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.03-Signed-APK
-          path: MH-Analysis-V.03.apk
+          name: MH-Analysis-V.04-Signed-APK
+          path: MH-Analysis-V.04.apk
           if-no-files-found: error
 
       - name: Publish signed mobile update channel
@@ -108,9 +121,9 @@ jobs:
           set -euo pipefail
           VERSION=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
           VERSION_CODE=$(grep -E 'versionCode\s*=' app/build.gradle.kts | head -1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')
-          HASH=$(sha256sum MH-Analysis-V.03.apk | awk '{print $1}')
+          HASH=$(sha256sum MH-Analysis-V.04.apk | awk '{print $1}')
           DATE=$(date -u +%F)
-          CERT_SHA256=$(/usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --print-certs MH-Analysis-V.03.apk | sed -n 's/Signer #1 certificate SHA-256 digest: //p' | head -1)
+          CERT_SHA256=$(/usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --print-certs MH-Analysis-V.04.apk | sed -n 's/Signer #1 certificate SHA-256 digest: //p' | head -1)
           test -n "$CERT_SHA256"
           cat > "$RUNNER_TEMP/update.json" <<EOF
           {
@@ -124,7 +137,7 @@ jobs:
             "published_at": "$DATE"
           }
           EOF
-          cp MH-Analysis-V.03.apk "$RUNNER_TEMP/MH-Analysis.apk"
+          cp MH-Analysis-V.04.apk "$RUNNER_TEMP/MH-Analysis.apk"
           printf '%s\n' "$VERSION" > "$RUNNER_TEMP/VERSION"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
