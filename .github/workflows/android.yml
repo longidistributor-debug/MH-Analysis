@@ -35,6 +35,8 @@ jobs:
       - run: python3 scripts/patch_v01_compile_fix.py
       - run: python3 scripts/patch_v01_calendar_news.py
       - run: python3 scripts/patch_v03_manual_pack_fix.py
+      - name: Validate V.03 analysis architecture
+        run: python3 scripts/validate_v03_invariants.py
 
       - name: Use canonical PC MH logo
         shell: bash
