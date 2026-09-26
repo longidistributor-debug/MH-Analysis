@@ -1,4 +1,4 @@
-name: Build MH Analysis V.09 APK
+name: Build MH Analysis V.10 APK
 on:
   push:
     branches: [ main ]
@@ -49,6 +49,9 @@ jobs:
       - run: python3 scripts/patch_v09_result_touch.py
       - name: Validate V.09 organized results and chart gestures
         run: python3 scripts/validate_v09_result_chart.py
+      - run: python3 scripts/patch_v10_runtime_reliability.py
+      - name: Validate V.10 runtime execution and calendar reliability
+        run: python3 scripts/validate_v10_runtime.py
 
       - name: Use canonical PC MH logo
         shell: bash
@@ -83,11 +86,11 @@ jobs:
         if: github.event_name != 'push' || github.ref != 'refs/heads/main'
         run: gradle --no-daemon assembleDebug
 
-      - name: Upload V.09 debug validation APK
+      - name: Upload V.10 debug validation APK
         if: github.event_name != 'push' || github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.09-Debug-Validation
+          name: MH-Analysis-V.10-Debug-Validation
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
@@ -103,14 +106,14 @@ jobs:
           APK=app/build/outputs/apk/release/app-release.apk
           test -f "$APK"
           /usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --verbose --print-certs "$APK"
-          cp "$APK" MH-Analysis-V.09.apk
+          cp "$APK" MH-Analysis-V.10.apk
 
-      - name: Upload signed V.09 artifact
+      - name: Upload signed V.10 artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.09-Signed-APK
-          path: MH-Analysis-V.09.apk
+          name: MH-Analysis-V.10-Signed-APK
+          path: MH-Analysis-V.10.apk
           if-no-files-found: error
 
       - name: Publish signed mobile update channel
@@ -120,9 +123,9 @@ jobs:
           set -euo pipefail
           VERSION=$(grep -E 'versionName\s*=' app/build.gradle.kts | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
           VERSION_CODE=$(grep -E 'versionCode\s*=' app/build.gradle.kts | head -1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')
-          HASH=$(sha256sum MH-Analysis-V.09.apk | awk '{print $1}')
+          HASH=$(sha256sum MH-Analysis-V.10.apk | awk '{print $1}')
           DATE=$(date -u +%F)
-          CERT_SHA256=$(/usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --print-certs MH-Analysis-V.09.apk | sed -n 's/Signer #1 certificate SHA-256 digest: //p' | head -1)
+          CERT_SHA256=$(/usr/local/lib/android/sdk/build-tools/35.0.0/apksigner verify --print-certs MH-Analysis-V.10.apk | sed -n 's/Signer #1 certificate SHA-256 digest: //p' | head -1)
           test -n "$CERT_SHA256"
           cat > "$RUNNER_TEMP/update.json" <<EOF
           {
@@ -132,11 +135,11 @@ jobs:
             "download_url": "https://raw.githubusercontent.com/longidistributor-debug/MH-Analysis/android-update-channel/MH-Analysis.apk",
             "sha256": "$HASH",
             "signing_cert_sha256": "$CERT_SHA256",
-            "notes": "MH Analysis $VERSION organized results and chart touch controls update.",
+            "notes": "MH Analysis $VERSION runtime execution and economic-calendar reliability update.",
             "published_at": "$DATE"
           }
           EOF
-          cp MH-Analysis-V.09.apk "$RUNNER_TEMP/MH-Analysis.apk"
+          cp MH-Analysis-V.10.apk "$RUNNER_TEMP/MH-Analysis.apk"
           printf '%s\n' "$VERSION" > "$RUNNER_TEMP/VERSION"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
