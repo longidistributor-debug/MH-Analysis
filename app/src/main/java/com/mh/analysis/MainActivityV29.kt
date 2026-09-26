@@ -36,16 +36,15 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
     private var busy=false
     private var editHistory=false
     private var candles:List<Candle> = emptyList()
-    private var previousDay:FcsClient.PreviousDayRange?=null
     private var analyzeGeneration=0L
     private var analysisContext:String?=null
+    private var lastUnified:UnifiedAnalysisEngine.Result?=null
 
     override fun onCreate(b:Bundle?){
         super.onCreate(b);FcsClient.init(this)
         window.statusBarColor=Color.BLACK;window.navigationBarColor=Color.BLACK
         symbol=prefs.getString("symbol","XAUUSD")?:"XAUUSD"
         period=prefs.getString("period","15m")?:"15m"
-        removeLegacyAlarmAndRecordData()
         setContentView(buildUi())
     }
 
@@ -69,9 +68,7 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
             candles=live
             if(analysisContext==contextKey()){
                 val ev=LiveSetupStore.evaluate(this,symbol,period,live)
-                if(ev.changed){
-                    showSetup(ev.setup,"LIVE CONDITION UPDATED",ev.reason)
-                }
+                if(ev.changed)showSetup(ev.setup,"LIVE CONDITION UPDATED",ev.reason)
             }
         }
     }
@@ -81,7 +78,7 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
         root.addView(txt("بِسْمِ ٱللَّٰهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ",21f,true).apply{gravity=Gravity.CENTER;textAlignment=View.TEXT_ALIGNMENT_CENTER;setPadding(0,dp(3),0,dp(14))},LinearLayout.LayoutParams(-1,-2))
         val header=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL}
         header.addView(TextView(this).apply{text="MS";gravity=Gravity.CENTER;textSize=22f;setTextColor(Color.WHITE);setTypeface(typeface,Typeface.BOLD);background=round(Color.BLACK,18f,Color.WHITE)},LinearLayout.LayoutParams(dp(64),dp(64)))
-        header.addView(LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0);addView(txt("MH ANALYSIS",26f,true));addView(txt("Live Market Structure Engine",11f,false,Color.LTGRAY));addView(txt("MS • v33 • FRESH TIMEFRAME ENGINE",10f,true));addView(txt("◉ WhatsApp  +92 343 4824609",11f,false,Color.LTGRAY))},LinearLayout.LayoutParams(0,-2,1f))
+        header.addView(LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(14),0,0,0);addView(txt("MH ANALYSIS",26f,true));addView(txt("Live Market Structure Engine",11f,false,Color.LTGRAY));addView(txt("MS • V.01 • 3-CALL TRUE HTF ENGINE",10f,true));addView(txt("◉ WhatsApp  +92 343 4824609",11f,false,Color.LTGRAY))},LinearLayout.LayoutParams(0,-2,1f))
         root.addView(header)
 
         val keyCard=card();historyStatus=txt("",12f,true,Color.LTGRAY);keyCard.addView(historyStatus)
@@ -110,9 +107,9 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
             val html=assets.open("tradingview_live.html").bufferedReader().use{it.readText()};loadDataWithBaseURL("https://s3.tradingview.com/",html,"text/html","UTF-8",null)
         };cc.addView(chart,LinearLayout.LayoutParams(-1,dp(560)));root.addView(cc)
 
-        root.addView(section("SIGNAL CONTROL"));val sc=card();calls=txt("Analysis calls: ${usage()}/500",11f,true,Color.LTGRAY);sc.addView(calls)
-        sc.addView(actionButton("NEW ANALYZE",true){analyzeNow()},LinearLayout.LayoutParams(-1,dp(54)).apply{topMargin=dp(10)})
-        status=txt("$symbol • $period\nTRADINGVIEW LIVE • PRESS NEW ANALYZE FOR A FRESH SETUP",12f,false).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)};sc.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});root.addView(sc)
+        root.addView(section("SIGNAL CONTROL"));val sc=card();calls=txt("API calls: ${usage()}/500 • 3 per manual analysis",11f,true,Color.LTGRAY);sc.addView(calls)
+        sc.addView(actionButton("NEW ANALYZE / RE-EVALUATE",true){analyzeNow()},LinearLayout.LayoutParams(-1,dp(54)).apply{topMargin=dp(10)})
+        status=txt("$symbol • $period\nTRADINGVIEW LIVE • MANUAL ANALYSIS USES 3 FCS CALLS",12f,false).apply{setPadding(dp(12),dp(12),dp(12),dp(12));background=round(Color.rgb(12,12,12),12f,Color.DKGRAY)};sc.addView(status,LinearLayout.LayoutParams(-1,-2).apply{topMargin=dp(10)});root.addView(sc)
 
         root.addView(section("FLOATING"));val fc=card();fc.addView(Button(this).apply{text="ENABLE MS LIVE FLOAT";setTextColor(Color.WHITE);background=round(Color.rgb(25,25,25),12f,Color.GRAY);setOnClickListener{enableFloat()}},LinearLayout.LayoutParams(-1,dp(52)));root.addView(fc)
         return ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.BLACK);addView(root)}
@@ -127,71 +124,58 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
         analyzeGeneration++
         busy=false
         analysisContext=null
+        lastUnified=null
         candles=emptyList()
-        previousDay=null
-        if(::status.isInitialized)status.text="$symbol • $period\nTIMEFRAME CHANGED • PRESS NEW ANALYZE FOR FRESH DATA"
+        if(::status.isInitialized)status.text="$symbol • $period\nMARKET CHANGED • NO FCS REST CALL USED • PRESS NEW ANALYZE / RE-EVALUATE"
         if(chartReady)chart.evaluateJavascript("clearSignalCard()",null)
     }
 
     private fun switchVisibleChart(){
         pairLabel.text="$symbol • $period"
-        if(chartReady){
-            chart.evaluateJavascript("clearSignalCard();loadTradingView(${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null)
-        }
-        if(analysisContext!=contextKey()&&::status.isInitialized){
-            status.text="$symbol • $period\nTRADINGVIEW LIVE • PRESS NEW ANALYZE FOR A FRESH $period SETUP"
-        }
+        if(chartReady)chart.evaluateJavascript("clearSignalCard();loadTradingView(${JSONObject.quote(symbol)},${JSONObject.quote(period)})",null)
+        if(analysisContext!=contextKey()&&::status.isInitialized)status.text="$symbol • $period\nTRADINGVIEW LIVE • PRESS NEW ANALYZE / RE-EVALUATE FOR FRESH 3-CALL ANALYSIS"
     }
 
     private fun analyzeNow(){
         val key=savedHistoryKey();if(key.isBlank()){status.text="SAVE ANALYSIS ACCESS KEY ONCE";return}
-        if(busy){status.text="FRESH ANALYSIS IS ALREADY RUNNING FOR $symbol • $period";return}
+        if(busy){status.text="MANUAL ANALYSIS IS ALREADY RUNNING FOR $symbol • $period";return}
         val token=++analyzeGeneration;val reqSymbol=symbol;val reqPeriod=period;val reqContext="$reqSymbol|$reqPeriod"
-        busy=true;status.text="NEW ANALYZE • refreshing current $reqSymbol $reqPeriod candle and structure…"
+        busy=true;status.text="NEW ANALYZE / RE-EVALUATE\n1/3 selected timeframe • 2/3 true HTF • 3/3 execution snapshot…"
         thread{
             try{
-                var credits=0
-                val data=FcsClient.freshSnapshot(reqSymbol,reqPeriod,100,2200) ?: run{
-                    val pair=FcsClient.seedForPeriod(key,reqSymbol,reqPeriod,true);credits+=pair.second;pair.first
-                }
-                val pdPair=runCatching{FcsClient.previousDayRange(key,reqSymbol)}.getOrElse{null to 0}
-                credits+=pdPair.second
+                val pack=FcsClient.manualAnalysisPack(key,reqSymbol,reqPeriod)
+                val result=UnifiedAnalysisEngine.analyze(this,reqSymbol,reqPeriod,pack.selected,pack.higherTimeframe,pack.higherTimeframePeriod,pack.quote)
                 runOnUiThread{
                     if(token!=analyzeGeneration||reqSymbol!=symbol||reqPeriod!=period)return@runOnUiThread
                     busy=false
-                    if(credits>0)addUsage(credits);calls.text="Analysis calls: ${usage()}/500"
-                    candles=data;previousDay=pdPair.first;analysisContext=reqContext
-                    performFreshAnalysis()
+                    if(pack.credits>0)addUsage(pack.credits);calls.text="API calls: ${usage()}/500 • 3 per manual analysis"
+                    candles=pack.selected;analysisContext=reqContext;lastUnified=result
+                    performFreshAnalysis(result)
                 }
             }catch(e:Exception){
                 runOnUiThread{
                     if(token!=analyzeGeneration)return@runOnUiThread
                     busy=false
-                    status.text="FRESH ANALYSIS UNAVAILABLE\n${e.message}\nNo stale signal was generated. TradingView remains live."
-                    showSignalCard(null)
+                    status.text="3-CALL ANALYSIS UNAVAILABLE\n${e.message}\nNo stale signal was generated. TradingView remains live."
+                    showSignalCard(LiveSetupStore.load(this,symbol,period))
                 }
             }
         }
     }
 
-    private fun performFreshAnalysis(){
+    private fun performFreshAnalysis(result:UnifiedAnalysisEngine.Result){
         if(candles.size<100){status.text="NOT ENOUGH FRESH MARKET HISTORY FOR RELIABLE $period ANALYSIS";showSignalCard(null);return}
-
-        val before=LiveSetupStore.evaluate(this,symbol,period,candles).setup
-        val raw=AnalysisEngine.analyze(symbol,period,candles)
-        val candidate=raw?.let{applyPreviousDayContext(it)}
+        val before=LiveSetupStore.load(this,symbol,period)
+        val candidate=result.signal
 
         if(candidate==null){
-            val after=LiveSetupStore.evaluate(this,symbol,period,candles).setup
-            if(after!=null&&after.state in setOf("PENDING","TRIGGERED")){
-                showSetup(after,"RE-EVALUATED • NO NEW REPLACEMENT",AnalysisEngine.noSignalReason(symbol,period,candles))
+            val current=LiveSetupStore.evaluate(this,symbol,period,candles).setup
+            val title=if(result.blocked)"EXECUTION BLOCKED" else "NO NEW SIGNAL"
+            if(current!=null&&current.state in setOf("PENDING","TRIGGERED")){
+                showSetup(current,"$title • EXISTING SETUP PRESERVED",result.decision)
             }else{
-                val terminal=after?.takeIf{it.state !in setOf("PENDING","TRIGGERED")}
-                if(terminal!=null)showSetup(terminal,"SETUP ${terminal.state}","Press NEW ANALYZE for the next fresh setup.")
-                else{
-                    status.text="NO CURRENT SETUP\n${marketContext()}\n\n${AnalysisEngine.noSignalReason(symbol,period,candles)}"
-                    showSignalCard(null)
-                }
+                status.text="$title\n${result.decision}\n\n${marketContext()}"
+                showSignalCard(current)
             }
             return
         }
@@ -203,36 +187,19 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
             changed->"NEW FRESH SIGNAL"
             else->"RE-EVALUATED • SETUP UNCHANGED"
         }
-        showSetup(accepted,title,if(changed)"Generated from the current $symbol $period snapshot." else "Current candle and structure still support the same setup.")
-    }
-
-    private fun applyPreviousDayContext(s:Signal):Signal{
-        val pd=previousDay?:return s
-        val last=candles.lastOrNull()?:return s
-        val reasons=s.reasons.toMutableList();var score=s.score
-        val bullSweep=last.l<pd.low&&last.c>pd.low
-        val bearSweep=last.h>pd.high&&last.c<pd.high
-        when{
-            bullSweep&&s.direction=="BUY"->{reasons.add(0,"Previous-day low liquidity sweep reclaimed (+4)");score+=4}
-            bearSweep&&s.direction=="SELL"->{reasons.add(0,"Previous-day high liquidity sweep rejected (+4)");score+=4}
-            bullSweep&&s.direction=="SELL"->{reasons.add(0,"Counter-signal: previous-day low was reclaimed (-4)");score-=4}
-            bearSweep&&s.direction=="BUY"->{reasons.add(0,"Counter-signal: previous-day high was rejected (-4)");score-=4}
-            last.c>pd.high&&s.direction=="BUY"->{reasons.add(0,"Price holding above previous-day high (+2)");score+=2}
-            last.c<pd.low&&s.direction=="SELL"->{reasons.add(0,"Price holding below previous-day low (+2)");score+=2}
-        }
-        return s.copy(score=score.coerceIn(60,99),reasons=reasons.take(12))
+        showSetup(accepted,title,result.decision)
     }
 
     private fun showSetup(a:ActiveSignal?,headline:String,note:String=""){
         if(a==null){status.text="$headline\n${marketContext()}";showSignalCard(null);return}
-        val s=a.signal;val why=s.reasons.take(7).joinToString("\n")
+        val s=a.signal;val why=s.reasons.take(8).joinToString("\n")
         status.text="$headline • ${s.timeframe}\n${s.direction} • ${s.score}/100 • ${a.state}\nEntry ${price(s.entry)}   SL ${price(s.sl)}\nTP1 ${price(s.tp1)}   TP2 ${price(s.tp2)}\n\n${marketContext()}\n\nWHY THIS TRADE\n${s.setupReason}\n\nCONFIRMATIONS\n$why${if(note.isBlank())"" else "\n\n$note"}"
         showSignalCard(a)
     }
 
     private fun marketContext():String{
-        val pd=previousDay
-        return if(pd==null)"PREVIOUS DAY • HIGH/LOW unavailable for this refresh" else "PREVIOUS DAY • HIGH ${price(pd.high)}   LOW ${price(pd.low)}"
+        val u=lastUnified?:return "TRUE HTF / EXECUTION / CALIBRATION • waiting for manual analysis"
+        return "${u.htfSummary}\n${u.executionSummary}\n${u.calibrationSummary}"
     }
 
     private fun showSignalCard(a:ActiveSignal?){
@@ -249,14 +216,7 @@ class MainActivityV29:Activity(),LiveSocketHub.Listener{
         if(savedHistoryKey().isNotBlank()&&!editHistory){editHistory=true;updateKeyUi();return}
         val x=historyInput.text.toString().trim();if(x.isBlank())return
         prefs.edit().putString("api_key",x).apply();editHistory=false;historyInput.setText("");updateKeyUi();LiveSocketHub.start(this,x)
-        Toast.makeText(this,"Analysis key saved",Toast.LENGTH_SHORT).show()
-    }
-
-    private fun removeLegacyAlarmAndRecordData(){
-        if(prefs.getBoolean("v33_legacy_cleanup",false))return
-        getSharedPreferences("mh_records",MODE_PRIVATE).edit().clear().apply()
-        getSharedPreferences("mh_alarms",MODE_PRIVATE).edit().clear().apply()
-        prefs.edit().putBoolean("v33_legacy_cleanup",true).apply()
+        Toast.makeText(this,"Analysis key saved • no REST analysis call used",Toast.LENGTH_SHORT).show()
     }
 
     private fun enableFloat(){
